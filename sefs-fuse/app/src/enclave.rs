@@ -5,7 +5,7 @@ use std::path;
 use sgx_types::*;
 use sgx_urts::SgxEnclave;
 
-static ENCLAVE_FILE: &'static str = "enclave.signed.so";
+static ENCLAVE_FILE: &'static str = "../lib/libsefs-fuse.signed.so";
 static ENCLAVE_TOKEN: &'static str = "enclave.token";
 
 

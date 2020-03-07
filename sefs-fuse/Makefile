@@ -85,7 +85,7 @@ App_C_Flags := $(SGX_COMMON_CFLAGS) -fPIC -Wno-attributes $(App_Include_Paths)
 
 App_Rust_Path := ./app/target/release
 App_Enclave_u_Object :=app/libEnclave_u.a
-App_Name := bin/app
+App_Name := bin/sefs-fuse
 
 ######## Enclave Settings ########
 
@@ -115,8 +115,8 @@ RustEnclave_Link_Flags := $(SGX_COMMON_CFLAGS) -Wl,--no-undefined -nostdlib -nod
 	-Wl,--gc-sections \
 	-Wl,--version-script=enclave/Enclave.lds
 
-RustEnclave_Name := enclave/enclave.so
-Signed_RustEnclave_Name := bin/enclave.signed.so
+RustEnclave_Name := enclave/libsefs-fuse.so
+Signed_RustEnclave_Name := lib/libsefs-fuse.signed.so
 
 .PHONY: all
 all: $(App_Name) $(Signed_RustEnclave_Name)
@@ -141,7 +141,7 @@ $(App_Enclave_u_Object): app/Enclave_u.o
 $(App_Name): $(App_Enclave_u_Object) $(App_SRC_Files)
 	@cd app && SGX_SDK=$(SGX_SDK) cargo build $(App_Rust_Flags)
 	@echo "Cargo  =>  $@"
-	cp $(App_Rust_Path)/app ./bin
+	cp $(App_Rust_Path)/sefs-fuse ./bin
 
 ######## Enclave Objects ########
 
