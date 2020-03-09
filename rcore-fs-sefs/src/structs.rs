@@ -37,8 +37,8 @@ pub struct DiskINode {
     pub nlinks: u16,
     /// number of blocks
     pub blocks: u32,
-    pub uid: u16,
-    pub gid: u8,
+    pub uid: u32,
+    pub gid: u32,
     pub atime: u32,
     pub mtime: u32,
     pub ctime: u32,

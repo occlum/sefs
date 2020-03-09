@@ -222,8 +222,8 @@ impl vfs::INode for INodeImpl {
     fn set_metadata(&self, metadata: &vfs::Metadata) -> vfs::Result<()> {
         let mut disk_inode = self.disk_inode.write();
         disk_inode.mode = metadata.mode;
-        disk_inode.uid = metadata.uid as u16;
-        disk_inode.gid = metadata.gid as u8;
+        disk_inode.uid = metadata.uid as u32;
+        disk_inode.gid = metadata.gid as u32;
         disk_inode.atime = metadata.atime.sec as u32;
         disk_inode.mtime = metadata.mtime.sec as u32;
         disk_inode.ctime = metadata.ctime.sec as u32;
