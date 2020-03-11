@@ -323,7 +323,16 @@ impl INode for LockedINode {
 fn lock_multiple<'a>(locks: &[&'a RwLock<RamFSINode>]) -> Vec<RwLockWriteGuard<'a, RamFSINode>> {
     let mut order: Vec<usize> = (0..locks.len()).collect();
     order.sort_by_key(|&i| locks[i].read().extra.inode);
-    order.iter().map(|&i| locks[i].write()).collect()
+    let mut lockguards_map = BTreeMap::new();
+    for &index in order.iter() {
+        lockguards_map.insert(index, locks[index].write());
+    }
+    // Keep the order of RwLockWriteGuard sync with the input locks
+    let order: Vec<usize> = (0..locks.len()).collect();
+    order
+        .iter()
+        .map(|i| lockguards_map.remove(i).unwrap())
+        .collect()
 }
 
 /// Generate a new inode id
