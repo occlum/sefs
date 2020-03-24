@@ -392,7 +392,7 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::DirRemoved);
         }
         if dest.get_file_inode_id(new_name).is_some() {
-            return Err(FsError::EntryExist);
+            dest.unlink(new_name)?;
         }
 
         let (inode_id, entry_id) = self
