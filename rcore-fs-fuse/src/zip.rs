@@ -19,8 +19,8 @@ pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>>
         let entry = entry?;
         let name_ = entry.file_name();
         let name = name_.to_str().unwrap();
-        let type_ = entry.file_type()?;
-        let metadata = fs::metadata(entry.path())?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        let type_ = metadata.file_type();
         let mode = metadata.permissions().mode() & S_IMASK;
         //println!("zip: name: {:?}, mode: {:#o}", entry.path(), mode);
         if type_.is_file() {
