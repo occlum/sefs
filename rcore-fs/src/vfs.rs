@@ -98,12 +98,13 @@ impl dyn INode {
         self.lookup_follow(path, 0)
     }
 
-    /// Lookup path from current INode, and follow symlinks at most `follow_times` times
-    pub fn lookup_follow(&self, path: &str, mut follow_times: usize) -> Result<Arc<dyn INode>> {
+    /// Lookup path from current INode, and follow symlinks at most `max_follow_times` times
+    pub fn lookup_follow(&self, path: &str, max_follow_times: usize) -> Result<Arc<dyn INode>> {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
 
+        let mut follow_times = 0;
         let mut result = self.find(".")?;
         let mut rest_path = String::from(path);
         while rest_path != "" {
@@ -129,8 +130,10 @@ impl dyn INode {
             };
             let inode = result.find(&name)?;
             // Handle symlink
-            if inode.metadata()?.type_ == FileType::SymLink && follow_times > 0 {
-                follow_times -= 1;
+            if inode.metadata()?.type_ == FileType::SymLink && max_follow_times > 0 {
+                if follow_times >= max_follow_times {
+                    return Err(FsError::SymLoop);
+                }
                 let mut content = [0u8; 256];
                 let len = inode.read_at(0, &mut content)?;
                 let path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
@@ -145,6 +148,7 @@ impl dyn INode {
                     }
                     new_path
                 };
+                follow_times += 1;
             } else {
                 result = inode
             }
