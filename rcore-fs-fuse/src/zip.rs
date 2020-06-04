@@ -14,9 +14,9 @@ const BUF_SIZE: usize = 0x1000;
 const S_IMASK: u32 = 0o777;
 
 pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
-    let dir = fs::read_dir(path)?;
-    for entry in dir {
-        let entry = entry?;
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.map(|dir| dir.unwrap()).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
         let name_ = entry.file_name();
         let name = name_.to_str().unwrap();
         let metadata = fs::symlink_metadata(entry.path())?;

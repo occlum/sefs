@@ -60,6 +60,13 @@ impl Debug for SefsUuid {
     }
 }
 
+impl From<usize> for SefsUuid {
+    fn from(id: usize) -> Self {
+        let uuid = (id as u128).to_le_bytes();
+        Self(uuid)
+    }
+}
+
 pub trait UuidProvider: Send + Sync {
     fn generate_uuid(&self) -> SefsUuid;
 }

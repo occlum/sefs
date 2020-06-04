@@ -8,7 +8,7 @@ use static_assertions::const_assert;
 
 use super::dev::{SefsMac, SefsUuid};
 
-/// On-disk superblock
+/// On-disk superblock, 32-bit aligned
 #[repr(C)]
 #[derive(Debug)]
 pub struct SuperBlock {
@@ -22,7 +22,7 @@ pub struct SuperBlock {
     pub groups: u32,
 }
 
-/// On-disk inode
+/// On-disk inode, 32-bit aligned
 #[repr(C)]
 #[derive(Debug)]
 pub struct DiskINode {
@@ -133,7 +133,7 @@ pub const DIRENT_SIZE: usize = 260;
 pub const METAFILE_NAME: &str = "metadata";
 
 /// file types
-#[repr(u16)]
+#[repr(u32)]
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum FileType {
     Invalid = 0,

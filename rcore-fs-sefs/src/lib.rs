@@ -646,7 +646,7 @@ impl SEFS {
         #[cfg(not(feature = "create_image"))]
         match create {
             false => inode.check_integrity(),
-            _ => {},
+            _ => {}
         };
         self.inodes.write().insert(id, Arc::downgrade(&inode));
         inode
@@ -670,8 +670,13 @@ impl SEFS {
     /// Create a new INode file
     fn new_inode(&self, type_: FileType, mode: u16) -> vfs::Result<Arc<INodeImpl>> {
         let id = self.alloc_block().ok_or(FsError::NoDeviceSpace)?;
-        let time = self.time_provider.current_time().sec as u32;
-        let uuid = self.uuid_provider.generate_uuid();
+        let (time, uuid) = match self.device.is_integrity_only() {
+            true => (0, SefsUuid::from(id)),
+            false => (
+                self.time_provider.current_time().sec as u32,
+                self.uuid_provider.generate_uuid(),
+            ),
+        };
         let disk_inode = Dirty::new_dirty(DiskINode {
             size: 0,
             type_,
