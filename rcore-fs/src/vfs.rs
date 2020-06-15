@@ -114,7 +114,7 @@ impl dyn INode {
             // handle absolute path
             if let Some('/') = rest_path.chars().next() {
                 result = self.fs().root_inode();
-                rest_path = String::from(&rest_path[1..]);
+                rest_path = String::from(rest_path[1..].trim_start_matches('/'));
                 continue;
             }
             let name;
@@ -125,7 +125,7 @@ impl dyn INode {
                 }
                 Some(pos) => {
                     name = String::from(&rest_path[0..pos]);
-                    rest_path = String::from(&rest_path[pos + 1..]);
+                    rest_path = String::from(rest_path[pos + 1..].trim_start_matches('/'));
                 }
             };
             let inode = result.find(&name)?;
