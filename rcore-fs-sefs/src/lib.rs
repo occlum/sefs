@@ -371,10 +371,10 @@ impl vfs::INode for INodeImpl {
         if info.nlinks <= 0 {
             return Err(FsError::DirRemoved);
         }
-        if old_name == "." {
+        if old_name == "." || old_name == ".." {
             return Err(FsError::IsDir);
         }
-        if old_name == ".." {
+        if new_name == "." || new_name == ".." {
             return Err(FsError::IsDir);
         }
 
@@ -391,7 +391,27 @@ impl vfs::INode for INodeImpl {
         if dest_info.nlinks <= 0 {
             return Err(FsError::DirRemoved);
         }
-        if dest.get_file_inode_id(new_name).is_some() {
+        if let Ok(dest_inode) = dest.find(new_name) {
+            let inode = self.find(old_name)?;
+            if inode.metadata()?.inode == dest_inode.metadata()?.inode {
+                return Ok(());
+            }
+            let inode_type = inode.metadata()?.type_;
+            let dest_type = dest_inode.metadata()?.type_;
+            match (inode_type, dest_type) {
+                (vfs::FileType::Dir, vfs::FileType::Dir) => {
+                    if dest_inode.list()?.len() > 2 {
+                        return Err(FsError::DirNotEmpty);
+                    }
+                }
+                (vfs::FileType::Dir, _) => {
+                    return Err(FsError::NotDir);
+                }
+                (_, vfs::FileType::Dir) => {
+                    return Err(FsError::IsDir);
+                }
+                _ => {}
+            }
             dest.unlink(new_name)?;
         }
 
