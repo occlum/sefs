@@ -108,7 +108,7 @@ struct LockedINode(RwLock<RamFSINode>);
 impl INode for LockedINode {
     fn read_at(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
         let file = self.0.read();
-        if file.extra.type_ != FileType::File {
+        if file.extra.type_ != FileType::File && file.extra.type_ != FileType::SymLink {
             return Err(FsError::NotFile);
         }
         let start = file.content.len().min(offset);
@@ -120,7 +120,7 @@ impl INode for LockedINode {
 
     fn write_at(&self, offset: usize, buf: &[u8]) -> Result<usize> {
         let mut file = self.0.write();
-        if file.extra.type_ != FileType::File {
+        if file.extra.type_ != FileType::File && file.extra.type_ != FileType::SymLink {
             return Err(FsError::NotFile);
         }
         let content = &mut file.content;
