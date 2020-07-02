@@ -764,6 +764,10 @@ impl vfs::FileSystem for SEFS {
         self.get_inode(BLKN_ROOT)
     }
 
+    fn root_mac(&self) -> vfs::FsMac {
+        self.meta_file.get_file_mac().unwrap().0
+    }
+
     fn info(&self) -> vfs::FsInfo {
         let sb = self.super_block.read();
         vfs::FsInfo {

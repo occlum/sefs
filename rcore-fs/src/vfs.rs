@@ -277,6 +277,9 @@ pub enum FileType {
     Socket,
 }
 
+pub const FS_MAC_SIZE: usize = 16;
+pub type FsMac = [u8; FS_MAC_SIZE];
+
 /// Metadata of FileSystem
 ///
 /// Ref: [http://pubs.opengroup.org/onlinepubs/9699919799/]
@@ -349,6 +352,11 @@ pub trait FileSystem: Sync + Send {
 
     /// Get the root INode of the file system
     fn root_inode(&self) -> Arc<dyn INode>;
+
+    /// Get the root MAC of the file system
+    fn root_mac(&self) -> FsMac {
+        Default::default()
+    }
 
     /// Get the file system information
     fn info(&self) -> FsInfo;
