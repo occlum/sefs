@@ -162,7 +162,7 @@ impl INode for LockedINode {
 
     fn resize(&self, len: usize) -> Result<()> {
         let mut file = self.0.write();
-        if file.extra.type_ == FileType::File {
+        if file.extra.type_ == FileType::File || file.extra.type_ == FileType::SymLink {
             file.content.resize(len, 0);
             Ok(())
         } else {

@@ -103,6 +103,9 @@ impl dyn INode {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
+        if path.len() > PATH_MAX {
+            return Err(FsError::NameTooLong);
+        }
 
         let mut follow_times = 0;
         let mut result = self.find(".")?;
@@ -134,7 +137,7 @@ impl dyn INode {
                 if follow_times >= max_follow_times {
                     return Err(FsError::SymLoop);
                 }
-                let mut content = [0u8; 256];
+                let mut content = [0u8; PATH_MAX];
                 let len = inode.read_at(0, &mut content)?;
                 let path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
                 // result remains unchanged
@@ -156,6 +159,11 @@ impl dyn INode {
         Ok(result)
     }
 }
+
+/// Maximum bytes in a path
+///
+/// Ref: Linux Kernel include/uapi/linux/limits.h
+pub const PATH_MAX: usize = 4096;
 
 pub enum IOCTLError {
     NotValidFD = 9,      // EBADF
@@ -279,6 +287,7 @@ pub enum FsError {
     WrProtected, // E_RDOFS
     NoIntegrity, // E_RDOFS
     PermError,   // E_PERM
+    NameTooLong, // E_NAMETOOLONG
 }
 
 impl fmt::Display for FsError {
