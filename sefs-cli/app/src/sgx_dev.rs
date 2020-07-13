@@ -1,5 +1,5 @@
 use rcore_fs_sefs::dev::SefsMac;
-use rcore_fs_sefs::dev::{DevResult, DeviceError, File, Storage};
+use rcore_fs_sefs::dev::{DevResult, File, Storage};
 use sgx_types::*;
 use std::fs::remove_file;
 use std::mem;

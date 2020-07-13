@@ -1,5 +1,5 @@
 [package]
-name = "app"
+name = "sefs-fuse"
 version = "1.0.0"
 authors = ["Antfin"]
 build = "build.rs"
@@ -12,6 +12,6 @@ dirs = "1.0.2"
 fuse = "0.3"
 structopt = "0.3"
 env_logger = "0.7"
-rcore-fs-fuse = { path = "../../rcore-fs-fuse", features = ["use_fuse"] }
+rcore-fs-cli = { path = "../../rcore-fs-cli", features = ["use_fuse"] }
 rcore-fs-sefs = { path = "../../rcore-fs-sefs", features = ["create_image"] }
 rcore-fs = { path = "../../rcore-fs", features = ["std"] }

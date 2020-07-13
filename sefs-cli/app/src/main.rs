@@ -32,11 +32,10 @@ use structopt::StructOpt;
 
 use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
-use rcore_fs_fuse::fuse::VfsFuse;
-use rcore_fs_fuse::zip::{unzip_dir, zip_dir};
+use rcore_fs_cli::fuse::VfsFuse;
+use rcore_fs_cli::zip::{unzip_dir, zip_dir};
 use rcore_fs_sefs as sefs;
 use rcore_fs_sefs::dev::std_impl::StdUuidProvider;
-use rcore_fs_sefs::INodeImpl;
 
 mod enclave;
 mod sgx_dev;

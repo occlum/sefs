@@ -85,7 +85,7 @@ App_C_Flags := $(SGX_COMMON_CFLAGS) -fPIC -Wno-attributes $(App_Include_Paths)
 
 App_Rust_Path := ./app/target/release
 App_Enclave_u_Object :=app/libEnclave_u.a
-App_Name := bin/app
+App_Name := bin/sefs-fuse
 
 ######## Enclave Settings ########
 
@@ -104,7 +104,7 @@ RustEnclave_C_Files := $(wildcard ./enclave/*.c)
 RustEnclave_C_Objects := $(RustEnclave_C_Files:.c=.o)
 RustEnclave_Include_Paths := -I$(CUSTOM_COMMON_PATH)/inc -I$(CUSTOM_EDL_PATH) -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/stlport -I$(SGX_SDK)/include/epid -I ./enclave -I./include
 
-RustEnclave_Link_Libs := -L$(CUSTOM_LIBRARY_PATH) -lcompiler-rt-patch -lenclave
+RustEnclave_Link_Libs := -L$(CUSTOM_LIBRARY_PATH) -lenclave
 RustEnclave_Compile_Flags := $(SGX_COMMON_CFLAGS) -nostdinc -fvisibility=hidden -fpie -fstack-protector $(RustEnclave_Include_Paths)
 RustEnclave_Link_Flags := $(SGX_COMMON_CFLAGS) -Wl,--no-undefined -nostdlib -nodefaultlibs -nostartfiles -L$(SGX_LIBRARY_PATH) \
 	-Wl,--whole-archive -l$(Trts_Library_Name) -l$(Service_Library_Name) -Wl,--no-whole-archive \
@@ -115,8 +115,8 @@ RustEnclave_Link_Flags := $(SGX_COMMON_CFLAGS) -Wl,--no-undefined -nostdlib -nod
 	-Wl,--gc-sections \
 	-Wl,--version-script=enclave/Enclave.lds
 
-RustEnclave_Name := enclave/enclave.so
-Signed_RustEnclave_Name := bin/enclave.signed.so
+RustEnclave_Name := enclave/libsefs-fuse.so
+Signed_RustEnclave_Name := lib/libsefs-fuse.signed.so
 
 .PHONY: all
 all: $(App_Name) $(Signed_RustEnclave_Name)
@@ -141,7 +141,7 @@ $(App_Enclave_u_Object): app/Enclave_u.o
 $(App_Name): $(App_Enclave_u_Object) $(App_SRC_Files)
 	@cd app && SGX_SDK=$(SGX_SDK) cargo build $(App_Rust_Flags)
 	@echo "Cargo  =>  $@"
-	cp $(App_Rust_Path)/app ./bin
+	cp $(App_Rust_Path)/sefs-fuse ./bin
 
 ######## Enclave Objects ########
 
@@ -149,8 +149,7 @@ enclave/Enclave_t.o: $(Enclave_EDL_Files)
 	@$(CC) $(RustEnclave_Compile_Flags) -c enclave/Enclave_t.c -o $@
 	@echo "CC   <=  $<"
 
-$(RustEnclave_Name): enclave compiler-rt enclave/Enclave_t.o
-	cp $(RUST_SGX_SDK)/compiler-rt/libcompiler-rt-patch.a ./lib
+$(RustEnclave_Name): enclave enclave/Enclave_t.o
 	@$(CXX) enclave/Enclave_t.o -o $@ $(RustEnclave_Link_Flags)
 	@echo "LINK =>  $@"
 
@@ -161,10 +160,6 @@ $(Signed_RustEnclave_Name): $(RustEnclave_Name)
 .PHONY: enclave
 enclave:
 	$(MAKE) -C ./enclave/
-
-.PHONY: compiler-rt
-compiler-rt:
-	$(MAKE) -C $(RUST_SGX_SDK)/compiler-rt/ 2> /dev/null
 
 .PHONY: clean
 clean:

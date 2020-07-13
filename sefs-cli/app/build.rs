@@ -41,6 +41,7 @@ fn main() {
     println!("cargo:rustc-link-search=native={}/lib64", sdk_dir);
     match is_sim.as_ref() {
         "SW" => println!("cargo:rustc-link-lib=dylib=sgx_urts_sim"),
+        "SIM" => println!("cargo:rustc-link-lib=dylib=sgx_urts_sim"),
         "HW" => println!("cargo:rustc-link-lib=dylib=sgx_urts"),
         _ => println!("cargo:rustc-link-lib=dylib=sgx_urts"), // Treat undefined as HW
     }
@@ -48,6 +49,7 @@ fn main() {
     // for sgx_tprotected_fs
     match is_sim.as_ref() {
         "SW" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service_sim"),
+        "SIM" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service_sim"),
         "HW" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service"),
         _ => println!("cargo:rustc-link-lib=dylib=sgx_uae_service"), // Treat undefined as HW
     }

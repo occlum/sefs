@@ -8,19 +8,19 @@ use std::path::Path;
 use std::str;
 use std::sync::Arc;
 
-use rcore_fs::vfs::{FileType, INode};
+use rcore_fs::vfs::{FileType, INode, PATH_MAX};
 
 const BUF_SIZE: usize = 0x1000;
 const S_IMASK: u32 = 0o777;
 
 pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
-    let dir = fs::read_dir(path)?;
-    for entry in dir {
-        let entry = entry?;
+    let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.map(|dir| dir.unwrap()).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
         let name_ = entry.file_name();
         let name = name_.to_str().unwrap();
-        let type_ = entry.file_type()?;
-        let metadata = fs::metadata(entry.path())?;
+        let metadata = fs::symlink_metadata(entry.path())?;
+        let type_ = metadata.file_type();
         let mode = metadata.permissions().mode() & S_IMASK;
         //println!("zip: name: {:?}, mode: {:#o}", entry.path(), mode);
         if type_.is_file() {
@@ -73,7 +73,7 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
                 unzip_dir(path.as_path(), inode)?;
             }
             FileType::SymLink => {
-                let mut buf: [u8; BUF_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+                let mut buf: [u8; PATH_MAX] = unsafe { MaybeUninit::uninit().assume_init() };
                 let len = inode.read_at(0, buf.as_mut())?;
                 std::os::unix::fs::symlink(str::from_utf8(&buf[..len]).unwrap(), path)?;
             }

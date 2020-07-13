@@ -115,12 +115,16 @@ pub trait INode: Any + Sync + Send {
         self.lookup_follow(path, 0)
     }
 
-    /// Lookup path from current INode, and follow symlinks at most `follow_times` times
-    fn lookup_follow(&self, path: &str, mut follow_times: usize) -> Result<Arc<dyn INode>> {
+    /// Lookup path from current INode, and follow symlinks at most `max_follow_times` times
+    fn lookup_follow(&self, path: &str, max_follow_times: usize) -> Result<Arc<dyn INode>> {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
+        if path.len() > PATH_MAX {
+            return Err(FsError::NameTooLong);
+        }
 
+        let mut follow_times = 0;
         let mut result = self.find(".")?;
         let mut rest_path = String::from(path);
         while rest_path != "" {
@@ -130,7 +134,7 @@ pub trait INode: Any + Sync + Send {
             // handle absolute path
             if let Some('/') = rest_path.chars().next() {
                 result = self.fs().root_inode();
-                rest_path = String::from(&rest_path[1..]);
+                rest_path = String::from(rest_path[1..].trim_start_matches('/'));
                 continue;
             }
             let name;
@@ -141,7 +145,7 @@ pub trait INode: Any + Sync + Send {
                 }
                 Some(pos) => {
                     name = String::from(&rest_path[0..pos]);
-                    rest_path = String::from(&rest_path[pos + 1..]);
+                    rest_path = String::from(rest_path[pos + 1..].trim_start_matches('/'));
                 }
             };
             if name == "" {
@@ -149,9 +153,11 @@ pub trait INode: Any + Sync + Send {
             }
             let inode = result.find(&name)?;
             // Handle symlink
-            if inode.metadata()?.type_ == FileType::SymLink && follow_times > 0 {
-                follow_times -= 1;
-                let mut content = [0u8; 256];
+            if inode.metadata()?.type_ == FileType::SymLink && max_follow_times > 0 {
+                if follow_times >= max_follow_times {
+                    return Err(FsError::SymLoop);
+                }
+                let mut content = [0u8; PATH_MAX];
                 let len = inode.read_at(0, &mut content)?;
                 let path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
                 // result remains unchanged
@@ -165,6 +171,7 @@ pub trait INode: Any + Sync + Send {
                     }
                     new_path
                 };
+                follow_times += 1;
             } else {
                 result = inode
             }
@@ -190,6 +197,11 @@ impl dyn INode {
         self.as_any_ref().downcast_ref::<T>()
     }
 }
+
+/// Maximum bytes in a path
+///
+/// Ref: Linux Kernel include/uapi/linux/limits.h
+pub const PATH_MAX: usize = 4096;
 
 pub enum IOCTLError {
     NotValidFD = 9,      // EBADF
@@ -313,6 +325,7 @@ pub enum FsError {
     WrProtected, // E_RDOFS
     NoIntegrity, // E_RDOFS
     PermError,   // E_PERM
+    NameTooLong, // E_NAMETOOLONG
 }
 
 impl fmt::Display for FsError {

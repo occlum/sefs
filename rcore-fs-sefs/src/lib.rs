@@ -222,8 +222,8 @@ impl vfs::INode for INodeImpl {
     fn set_metadata(&self, metadata: &vfs::Metadata) -> vfs::Result<()> {
         let mut disk_inode = self.disk_inode.write();
         disk_inode.mode = metadata.mode;
-        disk_inode.uid = metadata.uid as u16;
-        disk_inode.gid = metadata.gid as u8;
+        disk_inode.uid = metadata.uid as u32;
+        disk_inode.gid = metadata.gid as u32;
         disk_inode.atime = metadata.atime.sec as u32;
         disk_inode.mtime = metadata.mtime.sec as u32;
         disk_inode.ctime = metadata.ctime.sec as u32;
@@ -392,7 +392,7 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::DirRemoved);
         }
         if dest.get_file_inode_id(new_name).is_some() {
-            return Err(FsError::EntryExist);
+            dest.unlink(new_name)?;
         }
 
         let (inode_id, entry_id) = self
@@ -670,8 +670,13 @@ impl SEFS {
     /// Create a new INode file
     fn new_inode(&self, type_: FileType, mode: u16) -> vfs::Result<Arc<INodeImpl>> {
         let id = self.alloc_block().ok_or(FsError::NoDeviceSpace)?;
-        let time = self.time_provider.current_time().sec as u32;
-        let uuid = self.uuid_provider.generate_uuid();
+        let (time, uuid) = match self.device.is_integrity_only() {
+            true => (0, SefsUuid::from(id)),
+            false => (
+                self.time_provider.current_time().sec as u32,
+                self.uuid_provider.generate_uuid(),
+            ),
+        };
         let disk_inode = Dirty::new_dirty(DiskINode {
             size: 0,
             type_,
