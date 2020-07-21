@@ -2,7 +2,7 @@
 
 use super::{DevResult, DeviceError, SefsMac, SefsUuid, UuidProvider};
 use spin::Mutex;
-use std::fs::{remove_file, File, OpenOptions};
+use std::fs::{read_dir, remove_file, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -55,6 +55,14 @@ impl super::Storage for StdStorage {
         let mut path = self.path.to_path_buf();
         path.push(file_id);
         remove_file(path)?;
+        Ok(())
+    }
+
+    fn clear(&self) -> DevResult<()> {
+        for child in read_dir(&self.path)? {
+            let child = child?;
+            remove_file(&child.path())?;
+        }
         Ok(())
     }
 }

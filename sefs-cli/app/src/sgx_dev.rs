@@ -1,7 +1,7 @@
 use rcore_fs_sefs::dev::SefsMac;
 use rcore_fs_sefs::dev::{DevResult, File, Storage};
 use sgx_types::*;
-use std::fs::remove_file;
+use std::fs::{read_dir, remove_file};
 use std::mem;
 use std::path::*;
 
@@ -47,6 +47,14 @@ impl Storage for SgxStorage {
     }
     fn is_integrity_only(&self) -> bool {
         self.integrity_only
+    }
+
+    fn clear(&self) -> DevResult<()> {
+        for child in read_dir(&self.path)? {
+            let child = child?;
+            remove_file(&child.path())?;
+        }
+        Ok(())
     }
 }
 

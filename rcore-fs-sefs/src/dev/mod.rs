@@ -43,6 +43,7 @@ pub trait Storage: Send + Sync {
     fn is_integrity_only(&self) -> bool {
         false
     }
+    fn clear(&self) -> DevResult<()>;
 }
 
 #[repr(C)]

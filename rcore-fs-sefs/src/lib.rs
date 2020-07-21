@@ -571,6 +571,8 @@ impl SEFS {
             }
             bitset
         };
+        // clear the existing files in storage
+        device.clear()?;
         let meta_file = device.create(METAFILE_NAME)?;
         meta_file.set_len(blocks * BLKSIZE)?;
 
