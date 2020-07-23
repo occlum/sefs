@@ -374,7 +374,7 @@ impl INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if !self.get_file_inode_id(name).is_none() {
@@ -506,7 +506,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
 
@@ -543,7 +543,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if !self.get_file_inode_id(name).is_none() {
@@ -570,7 +570,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if name == "." {
@@ -606,7 +606,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if old_name == "." {
@@ -626,7 +626,7 @@ impl vfs::INode for INodeImpl {
         if dest_info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if dest_info.nlinks <= 0 {
+        if dest_info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if dest.get_file_inode_id(new_name).is_some() {
@@ -706,7 +706,7 @@ impl Drop for INodeImpl {
     fn drop(&mut self) {
         self.sync_all()
             .expect("Failed to sync when dropping the SimpleFileSystem Inode");
-        if self.disk_inode.read().nlinks <= 0 {
+        if self.disk_inode.read().nlinks == 0 {
             self._resize(0).unwrap();
             self.disk_inode.write().sync();
             self.fs.free_block(self.id);

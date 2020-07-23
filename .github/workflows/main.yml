@@ -11,7 +11,7 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: nightly
+        toolchain: nightly-2020-04-07
         override: true
         components: rustfmt, clippy
     - name: Check code format
@@ -23,6 +23,7 @@ jobs:
       uses: actions-rs/cargo@v1
       with:
         command: clippy
+        args: -- -W clippy::uninit_assumed_init
 
   build:
     runs-on: ubuntu-latest

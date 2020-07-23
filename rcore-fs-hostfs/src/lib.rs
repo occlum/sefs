@@ -48,7 +48,7 @@ impl FileSystem for HostFS {
             bavail: 0,
             files: 0,
             ffree: 0,
-            namemax: 0
+            namemax: 0,
         }
     }
 }

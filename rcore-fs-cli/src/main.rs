@@ -131,20 +131,22 @@ fn open_fs(fs: &str, image: &Path, create: bool) -> Arc<dyn FileSystem> {
                 .expect("failed to open image");
             let device = Mutex::new(file);
             const MAX_SPACE: usize = 0x1000 * 0x1000 * 1024; // 1G
-            match create {
-                true => sfs::SimpleFileSystem::create(Arc::new(device), MAX_SPACE)
-                    .expect("failed to create sfs"),
-                false => sfs::SimpleFileSystem::open(Arc::new(device)).expect("failed to open sfs"),
+            if create {
+                sfs::SimpleFileSystem::create(Arc::new(device), MAX_SPACE)
+                    .expect("failed to create sfs")
+            } else {
+                sfs::SimpleFileSystem::open(Arc::new(device)).expect("failed to open sfs")
             }
         }
         "sefs" => {
             std::fs::create_dir_all(image).unwrap();
             let device = sefs::dev::StdStorage::new(image);
-            match create {
-                true => sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)
-                    .expect("failed to create sefs"),
-                false => sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)
-                    .expect("failed to open sefs"),
+            if create {
+                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)
+                    .expect("failed to create sefs")
+            } else {
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)
+                    .expect("failed to open sefs")
             }
         }
         "hostfs" => {

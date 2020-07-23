@@ -74,11 +74,11 @@ struct VirtualINode {
 }
 
 /// the name of MAC file
-const MAC_FILE: &'static str = ".unionfs.mac";
+const MAC_FILE: &str = ".unionfs.mac";
 /// the prefix of whiteout file
-const WH_PREFIX: &'static str = ".wh.";
+const WH_PREFIX: &str = ".wh.";
 /// the prefix of opaque file
-const OPAQUE_PREFIX: &'static str = ".opaque.";
+const OPAQUE_PREFIX: &str = ".opaque.";
 
 impl UnionFS {
     /// Create a `UnionFS` wrapper for file system `fs`
@@ -118,7 +118,7 @@ impl UnionFS {
     }
 
     /// Verify the MAC(s) in file with the input FS
-    fn verify_with_mac_file(file: Arc<dyn INode>, fs: &Vec<Arc<dyn FileSystem>>) -> Result<()> {
+    fn verify_with_mac_file(file: Arc<dyn INode>, fs: &[Arc<dyn FileSystem>]) -> Result<()> {
         let mut mac_content: FsMac = Default::default();
         let mut offset = 0;
         let mut iterator = fs[1..].iter();
@@ -141,7 +141,7 @@ impl UnionFS {
     }
 
     /// Create a file to record the FS's MAC
-    fn new_mac_file(fs: &Vec<Arc<dyn FileSystem>>) -> Result<()> {
+    fn new_mac_file(fs: &[Arc<dyn FileSystem>]) -> Result<()> {
         let file = fs[0].root_inode().create(MAC_FILE, FileType::File, 0o777)?;
         let mut offset = 0;
         for inner_fs in fs[1..].iter() {
@@ -253,7 +253,7 @@ impl UnionINodeInner {
     ) -> Result<BTreeMap<String, Option<Arc<dyn INode>>>> {
         let mut entries = BTreeMap::new();
         // images
-        if opaque == false {
+        if !opaque {
             for inode in inners[1..].iter().filter_map(|v| v.as_real()) {
                 // if the INode in image FS is not a directory,
                 // skip to merge the entries in lower FS

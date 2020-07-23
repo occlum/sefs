@@ -269,7 +269,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
 
@@ -303,7 +303,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if name == "." {
@@ -340,7 +340,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if !self.get_file_inode_id(name).is_none() {
@@ -368,7 +368,7 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if info.nlinks <= 0 {
+        if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if old_name == "." || old_name == ".." {
@@ -388,7 +388,7 @@ impl vfs::INode for INodeImpl {
         if dest_info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if dest_info.nlinks <= 0 {
+        if dest_info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
         if let Ok(dest_inode) = dest.find(new_name) {
@@ -481,7 +481,7 @@ impl Drop for INodeImpl {
 
         self.sync_all()
             .expect("Failed to sync when dropping the SEFS Inode");
-        if self.disk_inode.read().nlinks <= 0 {
+        if self.disk_inode.read().nlinks == 0 {
             self.disk_inode.write().sync();
             self.fs.free_block(self.id);
             let disk_filename = &self.disk_inode.read().disk_filename;

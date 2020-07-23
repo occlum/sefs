@@ -232,10 +232,6 @@ fn test_symlinks() -> Result<()> {
         "failed to find link2 by link2"
     );
     assert!(
-        Arc::ptr_eq(&root.lookup_follow("link2", 1)?, &link1),
-        "failed to find link1 by link2"
-    );
-    assert!(
         Arc::ptr_eq(&root.lookup_follow("link2", 2)?, &file1),
         "failed to find file1 by link2"
     );
@@ -250,14 +246,6 @@ fn test_symlinks() -> Result<()> {
     assert!(
         Arc::ptr_eq(&root.lookup_follow("link3", 0)?, &link3),
         "failed to find link3 by link3"
-    );
-    assert!(
-        Arc::ptr_eq(&root.lookup_follow("link3", 1)?, &link2),
-        "failed to find link2 by link3"
-    );
-    assert!(
-        Arc::ptr_eq(&root.lookup_follow("link3", 2)?, &link1),
-        "failed to find link1 by link3"
     );
     assert!(
         Arc::ptr_eq(&root.lookup_follow("link3", 3)?, &file1),
