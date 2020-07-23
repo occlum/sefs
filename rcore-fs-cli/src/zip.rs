@@ -64,7 +64,7 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
                 let mut len = BUF_SIZE;
                 while len == BUF_SIZE {
                     len = inode.read_at(offset, buf.as_mut())?;
-                    file.write(&buf[..len])?;
+                    file.write_all(&buf[..len])?;
                     offset += len;
                 }
             }
