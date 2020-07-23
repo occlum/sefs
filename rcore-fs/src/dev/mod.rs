@@ -59,6 +59,7 @@ impl<T: BlockDevice> Device for T {
                 try0!(len, BlockDevice::read_at(self, range.block, buf));
             } else {
                 use core::mem::MaybeUninit;
+                #[allow(clippy::uninit_assumed_init)]
                 let mut block_buf: [u8; 1 << 10] = unsafe { MaybeUninit::uninit().assume_init() };
                 assert!(Self::BLOCK_SIZE_LOG2 <= 10);
                 // Read to local buf first
@@ -86,6 +87,7 @@ impl<T: BlockDevice> Device for T {
                 try0!(len, BlockDevice::write_at(self, range.block, buf));
             } else {
                 use core::mem::MaybeUninit;
+                #[allow(clippy::uninit_assumed_init)]
                 let mut block_buf: [u8; 1 << 10] = unsafe { MaybeUninit::uninit().assume_init() };
                 assert!(Self::BLOCK_SIZE_LOG2 <= 10);
                 // Read to local buf first
