@@ -1,5 +1,5 @@
 [package]
-name = "sefs-fuse"
+name = "sefs-cli"
 version = "1.0.0"
 authors = ["Antfin"]
 build = "build.rs"
