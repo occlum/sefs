@@ -12,18 +12,21 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}/lib64", sdk_dir);
     match is_sim.as_ref() {
-        "SW" => println!("cargo:rustc-link-lib=dylib=sgx_urts_sim"),
-        "SIM" => println!("cargo:rustc-link-lib=dylib=sgx_urts_sim"),
+        "SW" | "SIM" => println!("cargo:rustc-link-lib=static=sgx_urts_sim_with_se_event"),
         "HW" => println!("cargo:rustc-link-lib=dylib=sgx_urts"),
         _ => println!("cargo:rustc-link-lib=dylib=sgx_urts"), // Treat undefined as HW
     }
 
     // for sgx_tprotected_fs
     match is_sim.as_ref() {
-        "SW" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service_sim"),
-        "SIM" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service_sim"),
+        "SW" | "SIM" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service_sim"),
         "HW" => println!("cargo:rustc-link-lib=dylib=sgx_uae_service"),
         _ => println!("cargo:rustc-link-lib=dylib=sgx_uae_service"), // Treat undefined as HW
     }
+
     println!("cargo:rustc-link-lib=dylib=sgx_uprotected_fs");
+    // Needed by sgx_urts_sim_with_se_event static library
+    println!("cargo:rustc-link-lib=dylib=crypto");
+    // Must link with C++ dynamic library
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 }
