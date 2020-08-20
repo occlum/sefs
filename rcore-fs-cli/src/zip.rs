@@ -57,6 +57,7 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
         let mut path = path.to_path_buf();
         path.push(name);
         let info = inode.metadata()?;
+        let perms = fs::Permissions::from_mode(info.mode as u32 & S_IMASK);
         match info.type_ {
             FileType::File => {
                 let mut file = fs::File::create(&path)?;
@@ -68,10 +69,12 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
                     file.write_all(&buf[..len])?;
                     offset += len;
                 }
+                file.set_permissions(perms)?;
             }
             FileType::Dir => {
                 fs::create_dir(&path)?;
                 unzip_dir(path.as_path(), inode)?;
+                fs::set_permissions(&path, perms)?;
             }
             FileType::SymLink => {
                 let mut buf: [u8; PATH_MAX] = unsafe { MaybeUninit::uninit().assume_init() };

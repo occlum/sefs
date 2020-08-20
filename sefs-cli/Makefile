@@ -56,7 +56,6 @@ App_C_Flags := $(SGX_COMMON_CFLAGS) -fPIC -Wno-attributes $(App_Include_Paths)
 
 App_Rust_Path := ./app/target/release
 App_Enclave_u_Object :=app/libEnclave_u.a
-App_Name := bin/sefs-cli
 
 ######## Enclave Settings ########
 
@@ -86,11 +85,19 @@ RustEnclave_Link_Flags := $(SGX_COMMON_CFLAGS) -Wl,--no-undefined -nostdlib -nod
 	-Wl,--gc-sections \
 	-Wl,--version-script=enclave/Enclave.lds
 
-RustEnclave_Name := enclave/libsefs-cli.so
+ifneq ($(SGX_MODE), HW)
+	RustEnclave_Name := lib/libsefs-cli_sim.so
+	App_Name := bin/sefs-cli_sim
+else
+	RustEnclave_Name := lib/libsefs-cli.so
+	App_Name := bin/sefs-cli
+endif
 Signed_RustEnclave_Name := lib/libsefs-cli.signed.so
 
 .PHONY: all
 all: $(App_Name) $(Signed_RustEnclave_Name)
+
+no_sign: $(App_Name) $(RustEnclave_Name)
 
 ######## EDL Objects ########
 
@@ -114,7 +121,7 @@ $(App_Name): $(App_Enclave_u_Object) $(App_SRC_Files)
 	@cd app && SGX_SDK=$(SGX_SDK) cargo build $(App_Rust_Flags)
 	@echo "Cargo  =>  $@"
 	@mkdir -p ./bin
-	cp $(App_Rust_Path)/sefs-cli ./bin
+	cp $(App_Rust_Path)/sefs-cli $@
 
 ######## Enclave Objects ########
 

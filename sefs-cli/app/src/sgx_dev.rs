@@ -1,7 +1,8 @@
 use rcore_fs_sefs::dev::SefsMac;
-use rcore_fs_sefs::dev::{DevResult, File, Storage};
+use rcore_fs_sefs::dev::{DevResult, DeviceError, File, Storage};
 use sgx_types::*;
 use std::fs::{read_dir, remove_file};
+use std::io;
 use std::mem;
 use std::path::*;
 
@@ -26,25 +27,24 @@ impl Storage for SgxStorage {
     fn open(&self, file_id: &str) -> DevResult<Box<dyn File>> {
         let mut path = self.path.clone();
         path.push(file_id);
-        let file = file_open(path.to_str().unwrap(), false, self.integrity_only);
+        let file = file_open(path.to_str().unwrap(), false, self.integrity_only)?;
         Ok(Box::new(SgxFile { file }))
     }
 
     fn create(&self, file_id: &str) -> DevResult<Box<dyn File>> {
         let mut path = self.path.clone();
         path.push(file_id);
-        let file = file_open(path.to_str().unwrap(), true, self.integrity_only);
+        let file = file_open(path.to_str().unwrap(), true, self.integrity_only)?;
         Ok(Box::new(SgxFile { file }))
     }
 
     fn remove(&self, file_id: &str) -> DevResult<()> {
         let mut path = self.path.to_path_buf();
         path.push(file_id);
-        match remove_file(path) {
-            Ok(_) => Ok(()),
-            Err(_) => panic!(),
-        }
+        remove_file(path)?;
+        Ok(())
     }
+
     fn is_integrity_only(&self) -> bool {
         self.integrity_only
     }
@@ -65,24 +65,18 @@ pub struct SgxFile {
 impl File for SgxFile {
     fn read_at(&self, buf: &mut [u8], offset: usize) -> DevResult<usize> {
         let len = file_read_at(self.file, offset, buf);
-        if len != buf.len() {
-            panic!(
-                "read_at return len: {} not equal to buf_len: {}",
-                len,
-                buf.len()
-            );
-        }
         Ok(len)
     }
 
     fn write_at(&self, buf: &[u8], offset: usize) -> DevResult<usize> {
         let len = file_write_at(self.file, offset, buf);
         if len != buf.len() {
-            panic!(
+            println!(
                 "write_at return len: {} not equal to buf_len: {}",
                 len,
                 buf.len()
             );
+            return Err(DeviceError);
         }
         Ok(len)
     }
@@ -95,7 +89,10 @@ impl File for SgxFile {
     fn flush(&self) -> DevResult<()> {
         match file_flush(self.file) {
             0 => Ok(()),
-            e => panic!("flush {}", e),
+            e => {
+                println!("failed to flush");
+                return Err(DeviceError);
+            }
         }
     }
 
@@ -119,6 +116,7 @@ extern "C" {
     fn ecall_file_open(
         eid: sgx_enclave_id_t,
         retval: *mut size_t,
+        error: *mut i32,
         path: *const u8,
         create: uint8_t,
         integrity_only: i32,
@@ -163,21 +161,30 @@ fn file_get_mac(fd: usize, mac: *mut sgx_aes_gcm_128bit_tag_t) -> usize {
     ret_val as usize
 }
 
-fn file_open(path: &str, create: bool, integrity_only: bool) -> usize {
+fn file_open(path: &str, create: bool, integrity_only: bool) -> DevResult<usize> {
     let cpath = format!("{}\0", path);
     let mut ret_val = 0;
+    let mut error = 0;
     unsafe {
         let ret = ecall_file_open(
             EID,
             &mut ret_val,
+            &mut error,
             cpath.as_ptr(),
             create as uint8_t,
             integrity_only as i32,
         );
         assert_eq!(ret, sgx_status_t::SGX_SUCCESS);
-        assert_ne!(ret_val, 0);
     }
-    ret_val
+    if ret_val == 0 {
+        let error = io::Error::from_raw_os_error(error);
+        println!(
+            "failed to open SGX protected file: {}, error: {:?}",
+            path, error
+        );
+        return Err(DeviceError);
+    }
+    Ok(ret_val)
 }
 
 fn file_close(fd: usize) -> i32 {

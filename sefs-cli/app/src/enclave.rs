@@ -5,10 +5,9 @@ use std::path;
 use sgx_types::*;
 use sgx_urts::SgxEnclave;
 
-static ENCLAVE_FILE: &'static str = "../lib/libsefs-cli.signed.so";
 static ENCLAVE_TOKEN: &'static str = "enclave.token";
 
-pub fn init_enclave() -> SgxResult<SgxEnclave> {
+pub fn init_enclave(enclave_path: &str) -> SgxResult<SgxEnclave> {
     let mut launch_token: sgx_launch_token_t = [0; 1024];
     let mut launch_token_updated: i32 = 0;
     // Step 1: try to retrieve the launch token saved by last transaction
@@ -29,25 +28,32 @@ pub fn init_enclave() -> SgxResult<SgxEnclave> {
     };
 
     let token_file: path::PathBuf = home_dir.join(ENCLAVE_TOKEN);
-    if use_token == true {
+    let need_new_token = if use_token {
         match fs::File::open(&token_file) {
             Err(_) => {
                 println!(
                     "[-] Open token file {} error! Will create one.",
                     token_file.as_path().to_str().unwrap()
                 );
+                true
             }
             Ok(mut f) => {
                 println!("[+] Open token file success! ");
                 match f.read(&mut launch_token) {
                     Ok(1024) => {
                         println!("[+] Token file valid!");
+                        false
                     }
-                    _ => println!("[+] Token file invalid, will create new token file"),
+                    _ => {
+                        println!("[+] Token file invalid, will create new token file");
+                        true
+                    }
                 }
             }
         }
-    }
+    } else {
+        false
+    };
 
     // Step 2: call sgx_create_enclave to initialize an enclave instance
     // Debug Support: set 2nd parameter to 1
@@ -57,7 +63,7 @@ pub fn init_enclave() -> SgxResult<SgxEnclave> {
         misc_select: 0,
     };
     let enclave = SgxEnclave::create(
-        ENCLAVE_FILE,
+        enclave_path,
         debug,
         &mut launch_token,
         &mut launch_token_updated,
@@ -65,7 +71,7 @@ pub fn init_enclave() -> SgxResult<SgxEnclave> {
     )?;
 
     // Step 3: save the launch token if it is updated
-    if use_token == true && launch_token_updated != 0 {
+    if use_token && (need_new_token || launch_token_updated != 0) {
         // reopen the file with write capablity
         match fs::File::create(&token_file) {
             Ok(mut f) => match f.write_all(&launch_token) {

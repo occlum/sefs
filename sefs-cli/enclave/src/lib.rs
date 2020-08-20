@@ -27,6 +27,7 @@ macro_rules! try_io {
 
 #[no_mangle]
 pub unsafe extern "C" fn ecall_file_open(
+    error: *mut i32,
     path: *const u8,
     create: bool,
     _integrity_only: i32,
@@ -41,6 +42,9 @@ pub unsafe extern "C" fn ecall_file_open(
     } else {
         sgx_fopen_integrity_only(path, mode.as_ptr())
     };
+    if file.is_null() {
+        *error = errno();
+    }
     file
 }
 

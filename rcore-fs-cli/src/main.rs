@@ -108,7 +108,7 @@ fn main() {
                 for image in union_images.iter() {
                     fss.push(hostfs::HostFS::new(image));
                 }
-                fs = unionfs::UnionFS::new(fss);
+                fs = unionfs::UnionFS::new(fss).expect("failed to new unionfs");
             }
             fuse::mount(VfsFuse::new(fs), &mount_point, &[]).expect("failed to mount fs");
         }
