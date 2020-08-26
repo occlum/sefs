@@ -1,6 +1,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![deny(warnings)]
 #![feature(get_mut_unchecked)]
+#![feature(new_uninit)]
 
 extern crate alloc;
 
@@ -8,6 +9,7 @@ extern crate alloc;
 extern crate log;
 
 use alloc::{
+    boxed::Box,
     collections::BTreeMap,
     string::String,
     sync::{Arc, Weak},
@@ -347,16 +349,58 @@ impl UnionINodeInner {
                             last_inode.create(last_inode_name, FileType::Dir, *mode as u32)?;
                     }
                     FileType::File => {
-                        last_inode =
+                        let last_file_inode =
                             last_inode.create(last_inode_name, FileType::File, *mode as u32)?;
-                        let data = self.inode().read_as_vec()?;
-                        last_inode.write_at(0, &data)?;
+                        // copy it from image to container chunk by chunk
+                        const BUF_SIZE: usize = 0x10000;
+                        let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
+                        let mut offset = 0usize;
+                        let mut len = BUF_SIZE;
+                        while len == BUF_SIZE {
+                            len = match self.inode().read_at(offset, buf.as_mut()) {
+                                Ok(len) => len,
+                                Err(e) => {
+                                    last_inode.unlink(last_inode_name)?;
+                                    return Err(e);
+                                }
+                            };
+                            match last_file_inode.write_at(offset, &buf[..len]) {
+                                Ok(len_written) if len_written != len => {
+                                    last_inode.unlink(last_inode_name)?;
+                                    return Err(FsError::DeviceError);
+                                }
+                                Err(e) => {
+                                    last_inode.unlink(last_inode_name)?;
+                                    return Err(e);
+                                }
+                                Ok(_) => {}
+                            }
+                            offset += len;
+                        }
+                        last_inode = last_file_inode;
                     }
                     FileType::SymLink => {
-                        last_inode =
+                        let last_link_inode =
                             last_inode.create(last_inode_name, FileType::SymLink, *mode as u32)?;
-                        let data = self.inode().read_as_vec()?;
-                        last_inode.write_at(0, &data)?;
+                        let data = match self.inode().read_as_vec() {
+                            Ok(data) => data,
+                            Err(e) => {
+                                last_inode.unlink(last_inode_name)?;
+                                return Err(e);
+                            }
+                        };
+                        match last_link_inode.write_at(0, &data) {
+                            Ok(len_written) if len_written != data.len() => {
+                                last_inode.unlink(last_inode_name)?;
+                                return Err(FsError::DeviceError);
+                            }
+                            Err(e) => {
+                                last_inode.unlink(last_inode_name)?;
+                                return Err(e);
+                            }
+                            Ok(_) => {}
+                        }
+                        last_inode = last_link_inode;
                     }
                     _ => unreachable!(),
                 }

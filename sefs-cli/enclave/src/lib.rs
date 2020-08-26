@@ -18,7 +18,7 @@ macro_rules! try_io {
     ($expr:expr) => {
         match $expr {
             errno if (errno as i32) == -1 => {
-                return errno as i32;
+                panic!("failed to call sgx functions");
             }
             val => val,
         }
@@ -68,9 +68,16 @@ pub unsafe extern "C" fn ecall_file_read_at(
     offset: usize,
     buf: *mut u8,
     len: usize,
-) -> i32 {
+) -> usize {
+    let file_size = {
+        try_io!(sgx_fseek(file, 0, SEEK_END));
+        try_io!(sgx_ftell(file)) as usize
+    };
+    if file_size < offset {
+        return 0;
+    }
     try_io!(sgx_fseek(file, offset as i64, SEEK_SET));
-    sgx_fread(buf, 1, len, file) as i32
+    sgx_fread(buf, 1, len, file) as usize
 }
 
 #[no_mangle]
@@ -79,32 +86,22 @@ pub unsafe extern "C" fn ecall_file_write_at(
     offset: usize,
     buf: *const u8,
     len: usize,
-) -> i32 {
-    try_io!(sgx_fseek(file, offset as i64, SEEK_SET));
-    sgx_fwrite(buf, 1, len, file) as i32
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ecall_file_set_len(file: SGX_FILE, len: usize) -> i32 {
-    let current_len = try_io!(sgx_fseek(file, 0, SEEK_END)) as usize;
-    if current_len < len {
+) -> usize {
+    try_io!(sgx_fseek(file, 0, SEEK_END));
+    let file_size = {
+        try_io!(sgx_fseek(file, 0, SEEK_END));
+        try_io!(sgx_ftell(file)) as usize
+    };
+    if file_size < offset {
         static ZEROS: [u8; 0x1000] = [0; 0x1000];
-        let mut rest_len = len - current_len;
+        let mut rest_len = offset - file_size;
         while rest_len != 0 {
             let l = rest_len.min(0x1000);
-            let ret = try_io!(sgx_fwrite(ZEROS.as_ptr(), 1, l, file)) as i32;
-            if ret == -12 {
-                warn!("Error 12: \"Cannot allocate memory\". Clear cache and try again.");
-                try_io!(sgx_fclear_cache(file));
-                try_io!(sgx_fwrite(ZEROS.as_ptr(), 1, l, file));
-            } else if ret < 0 {
-                return ret;
-            }
-            rest_len -= l;
+            let len = sgx_fwrite(ZEROS.as_ptr(), 1, l, file);
+            assert!(len != 0);
+            rest_len -= len;
         }
-        // NOTE: Don't try to write a large slice at once.
-        //       It will cause Error 12: "Cannot allocate memory"
     }
-    // TODO: how to shrink a file?
-    0
+    try_io!(sgx_fseek(file, offset as i64, SEEK_SET));
+    sgx_fwrite(buf, 1, len, file) as usize
 }

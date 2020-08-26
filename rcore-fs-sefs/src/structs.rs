@@ -27,7 +27,7 @@ pub struct SuperBlock {
 #[derive(Debug)]
 pub struct DiskINode {
     /// size of the file (in bytes)
-    pub size: u32,
+    pub size: u64,
     /// one of SYS_TYPE_* above
     pub type_: FileType,
     /// permission

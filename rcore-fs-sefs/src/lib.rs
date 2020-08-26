@@ -250,7 +250,7 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::NotFile);
         }
         self.file.set_len(len)?;
-        self.disk_inode.write().size = len as u32;
+        self.disk_inode.write().size = len as u64;
         Ok(())
     }
     fn create(

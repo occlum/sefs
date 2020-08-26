@@ -64,24 +64,32 @@ pub struct SgxFile {
 
 impl File for SgxFile {
     fn read_at(&self, buf: &mut [u8], offset: usize) -> DevResult<usize> {
-        match file_read_at(self.file, offset, buf) {
-            size if size >= 0 => Ok(size as usize),
-            e => panic!("read_at {}", e),
+        let len = file_read_at(self.file, offset, buf);
+        if len != buf.len() {
+            panic!(
+                "read_at return len: {} not equal to buf_len: {}",
+                len,
+                buf.len()
+            );
         }
+        Ok(len)
     }
 
     fn write_at(&self, buf: &[u8], offset: usize) -> DevResult<usize> {
-        match file_write_at(self.file, offset, buf) {
-            size if size >= 0 => Ok(size as usize),
-            e => panic!("write_at {}", e),
+        let len = file_write_at(self.file, offset, buf);
+        if len != buf.len() {
+            panic!(
+                "write_at return len: {} not equal to buf_len: {}",
+                len,
+                buf.len()
+            );
         }
+        Ok(len)
     }
 
-    fn set_len(&self, len: usize) -> DevResult<()> {
-        match file_set_len(self.file, len) {
-            0 => Ok(()),
-            e => panic!("set_len {}", e),
-        }
+    fn set_len(&self, _len: usize) -> DevResult<()> {
+        // NOTE: do nothing ?
+        Ok(())
     }
 
     fn flush(&self) -> DevResult<()> {
@@ -119,7 +127,7 @@ extern "C" {
     fn ecall_file_flush(eid: sgx_enclave_id_t, retval: *mut i32, fd: size_t) -> sgx_status_t;
     fn ecall_file_read_at(
         eid: sgx_enclave_id_t,
-        retval: *mut i32,
+        retval: *mut usize,
         fd: size_t,
         offset: size_t,
         buf: *mut uint8_t,
@@ -127,16 +135,10 @@ extern "C" {
     ) -> sgx_status_t;
     fn ecall_file_write_at(
         eid: sgx_enclave_id_t,
-        retval: *mut i32,
+        retval: *mut usize,
         fd: size_t,
         offset: size_t,
         buf: *const uint8_t,
-        len: size_t,
-    ) -> sgx_status_t;
-    fn ecall_file_set_len(
-        eid: sgx_enclave_id_t,
-        retval: *mut i32,
-        fd: size_t,
         len: size_t,
     ) -> sgx_status_t;
     fn ecall_file_get_mac(
@@ -196,8 +198,8 @@ fn file_flush(fd: usize) -> i32 {
     ret_val
 }
 
-fn file_read_at(fd: usize, offset: usize, buf: &mut [u8]) -> i32 {
-    let mut ret_val = -1;
+fn file_read_at(fd: usize, offset: usize, buf: &mut [u8]) -> usize {
+    let mut ret_val = 0;
     unsafe {
         let ret = ecall_file_read_at(EID, &mut ret_val, fd, offset, buf.as_mut_ptr(), buf.len());
         assert_eq!(ret, sgx_status_t::SGX_SUCCESS);
@@ -205,19 +207,10 @@ fn file_read_at(fd: usize, offset: usize, buf: &mut [u8]) -> i32 {
     ret_val
 }
 
-fn file_write_at(fd: usize, offset: usize, buf: &[u8]) -> i32 {
-    let mut ret_val = -1;
+fn file_write_at(fd: usize, offset: usize, buf: &[u8]) -> usize {
+    let mut ret_val = 0;
     unsafe {
         let ret = ecall_file_write_at(EID, &mut ret_val, fd, offset, buf.as_ptr(), buf.len());
-        assert_eq!(ret, sgx_status_t::SGX_SUCCESS);
-    }
-    ret_val
-}
-
-fn file_set_len(fd: usize, len: usize) -> i32 {
-    let mut ret_val = -1;
-    unsafe {
-        let ret = ecall_file_set_len(EID, &mut ret_val, fd, len);
         assert_eq!(ret, sgx_status_t::SGX_SUCCESS);
     }
     ret_val

@@ -1,3 +1,4 @@
+use std::boxed::Box;
 use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use rcore_fs::vfs::{FileType, INode, PATH_MAX};
 
-const BUF_SIZE: usize = 0x1000;
+const BUF_SIZE: usize = 0x10000;
 const S_IMASK: u32 = 0o777;
 
 pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
@@ -27,11 +28,11 @@ pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>>
             let inode = inode.create(name, FileType::File, mode)?;
             let mut file = fs::File::open(entry.path())?;
             inode.resize(file.metadata()?.len() as usize)?;
-            let mut buf: [u8; BUF_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+            let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
             let mut offset = 0usize;
             let mut len = BUF_SIZE;
             while len == BUF_SIZE {
-                len = file.read(&mut buf)?;
+                len = file.read(buf.as_mut())?;
                 inode.write_at(offset, &buf[..len])?;
                 offset += len;
             }
@@ -59,7 +60,7 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
         match info.type_ {
             FileType::File => {
                 let mut file = fs::File::create(&path)?;
-                let mut buf: [u8; BUF_SIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+                let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
                 let mut offset = 0usize;
                 let mut len = BUF_SIZE;
                 while len == BUF_SIZE {
