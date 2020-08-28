@@ -718,8 +718,17 @@ impl INode for UnionINode {
             self_inner.entries().insert(String::from(new_name), None);
         } else {
             // self and target are different INodes
-            let mut self_inner = self.inner.write();
-            let mut target_inner = target.inner.write();
+            let (mut self_inner, mut target_inner) = {
+                if self.metadata()?.inode < target.metadata()?.inode {
+                    let self_inner = self.inner.write();
+                    let target_inner = target.inner.write();
+                    (self_inner, target_inner)
+                } else {
+                    let target_inner = target.inner.write();
+                    let self_inner = self.inner.write();
+                    (self_inner, target_inner)
+                }
+            };
             let self_inode = self_inner.maybe_container_inode().unwrap();
             let target_inode = target_inner.container_inode()?;
             self_inode.move_(old_name, &target_inode, new_name)?;
