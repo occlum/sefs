@@ -578,6 +578,10 @@ impl INode for UnionINode {
             return Err(FsError::DirNotEmpty);
         }
         let mut inner = self.inner.write();
+        // when we got the lock, the entry may have been removed by another thread
+        if inner.entries().get(name).is_none() {
+            return Err(FsError::EntryNotFound);
+        }
         // if file is in container, remove directly
         let dir_inode = inner.container_inode()?;
         match dir_inode.find(name) {
