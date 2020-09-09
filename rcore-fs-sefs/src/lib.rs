@@ -31,18 +31,22 @@ impl dyn File {
         assert!(buf.len() <= BLKSIZE);
         self.read_exact_at(buf, id * BLKSIZE)
     }
+
     fn write_block(&self, id: BlockId, buf: &[u8]) -> DevResult<()> {
         assert!(buf.len() <= BLKSIZE);
         self.write_all_at(buf, id * BLKSIZE)
     }
+
     fn read_direntry(&self, id: usize) -> DevResult<DiskEntry> {
         let mut direntry: DiskEntry = unsafe { MaybeUninit::uninit().assume_init() };
         self.read_exact_at(direntry.as_buf_mut(), DIRENT_SIZE * id)?;
         Ok(direntry)
     }
+
     fn write_direntry(&self, id: usize, direntry: &DiskEntry) -> DevResult<()> {
         self.write_all_at(direntry.as_buf(), DIRENT_SIZE * id)
     }
+
     /// Load struct `T` from given block in device
     fn load_struct<T: AsBuf>(&self, id: BlockId) -> DevResult<T> {
         let mut s: T = unsafe { MaybeUninit::uninit().assume_init() };
@@ -89,6 +93,7 @@ impl INodeImpl {
         self.get_file_inode_and_entry_id(name)
             .map(|(inode_id, _)| inode_id)
     }
+
     /// Init dir content. Insert 2 init entries.
     /// This do not init nlinks, please modify the nlinks in the invoker.
     fn dirent_init(&self, parent: INodeId) -> vfs::Result<()> {
@@ -110,15 +115,18 @@ impl INodeImpl {
         )?;
         Ok(())
     }
-    fn dirent_append(&self, entry: &DiskEntry) -> vfs::Result<()> {
+
+    /// Append an entry of file at the end
+    fn dirent_append(&self, entry: &DiskEntry) -> vfs::Result<usize> {
         let mut inode = self.disk_inode.write();
         let total = &mut inode.blocks;
-        self.file.write_direntry(*total as usize, entry)?;
+        let entry_id = *total as usize;
+        self.file.write_direntry(entry_id, entry)?;
         *total += 1;
-        Ok(())
+        Ok(entry_id)
     }
-    /// remove a page in middle of file and insert the last page here, useful for dirent remove
-    /// should be only used in unlink
+
+    /// Remove an entry of file and replacing it with the last one, useful for dirent remove
     fn dirent_remove(&self, id: usize) -> vfs::Result<()> {
         let total = self.disk_inode.read().blocks as usize;
         debug_assert!(id < total);
@@ -130,14 +138,28 @@ impl INodeImpl {
         self.disk_inode.write().blocks -= 1;
         Ok(())
     }
+
+    /// Remove an INode entry from Dir entries, and decrease nlinks if success
+    fn dirent_inode_remove(&self, inode: Arc<INodeImpl>, entry_id: usize) -> vfs::Result<()> {
+        self.dirent_remove(entry_id)?;
+        inode.nlinks_dec();
+        if inode.disk_inode.read().type_ == FileType::Dir {
+            inode.nlinks_dec(); //for .
+            self.nlinks_dec(); //for ..
+        }
+        Ok(())
+    }
+
     fn nlinks_inc(&self) {
         self.disk_inode.write().nlinks += 1;
     }
+
     fn nlinks_dec(&self) {
         let mut disk_inode = self.disk_inode.write();
         assert!(disk_inode.nlinks > 0);
         disk_inode.nlinks -= 1;
     }
+
     #[cfg(feature = "create_image")]
     pub fn update_mac(&self) -> vfs::Result<()> {
         if self.fs.device.is_integrity_only() {
@@ -147,6 +169,7 @@ impl INodeImpl {
         }
         Ok(())
     }
+
     #[cfg(not(feature = "create_image"))]
     fn check_integrity(&self) {
         if self.fs.device.is_integrity_only() {
@@ -156,6 +179,19 @@ impl INodeImpl {
             let not_integrity = inode_mac.0 != file_mac.0;
             assert!(!not_integrity, "FsError::NoIntegrity");
         }
+    }
+
+    /// Write the INode's info into metadata file
+    fn sync_metadata(&self) -> vfs::Result<()> {
+        let mut disk_inode = self.disk_inode.write();
+        if disk_inode.dirty() {
+            self.fs
+                .meta_file
+                .write_block(self.id, disk_inode.as_buf())?;
+            disk_inode.sync();
+        }
+        self.fs.meta_file.flush()?;
+        Ok(())
     }
 }
 
@@ -168,6 +204,7 @@ impl vfs::INode for INodeImpl {
         let len = self.file.read_at(buf, offset)?;
         Ok(len)
     }
+
     fn write_at(&self, offset: usize, buf: &[u8]) -> vfs::Result<usize> {
         let DiskINode { type_, size, .. } = **self.disk_inode.read();
         if type_ != FileType::File && type_ != FileType::SymLink {
@@ -180,6 +217,7 @@ impl vfs::INode for INodeImpl {
         let len = self.file.write_at(buf, offset)?;
         Ok(len)
     }
+
     fn poll(&self) -> vfs::Result<vfs::PollStatus> {
         Ok(vfs::PollStatus {
             read: true,
@@ -187,6 +225,7 @@ impl vfs::INode for INodeImpl {
             error: false,
         })
     }
+
     /// the size returned here is logical size(entry num for directory), not the disk space used.
     fn metadata(&self) -> vfs::Result<vfs::Metadata> {
         let disk_inode = self.disk_inode.read();
@@ -220,6 +259,7 @@ impl vfs::INode for INodeImpl {
             rdev: 0,
         })
     }
+
     fn set_metadata(&self, metadata: &vfs::Metadata) -> vfs::Result<()> {
         let mut disk_inode = self.disk_inode.write();
         disk_inode.mode = metadata.mode;
@@ -230,21 +270,21 @@ impl vfs::INode for INodeImpl {
         disk_inode.ctime = metadata.ctime.sec as u32;
         Ok(())
     }
+
     fn sync_all(&self) -> vfs::Result<()> {
-        let mut disk_inode = self.disk_inode.write();
-        if disk_inode.dirty() {
-            self.fs
-                .meta_file
-                .write_block(self.id, disk_inode.as_buf())?;
-            disk_inode.sync();
-        }
+        // Sync data
         self.sync_data()?;
+        // Sync metadata
+        // This sequence ensures the metadata is always valid for the data
+        self.sync_metadata()?;
         Ok(())
     }
+
     fn sync_data(&self) -> vfs::Result<()> {
         self.file.flush()?;
         Ok(())
     }
+
     fn resize(&self, len: usize) -> vfs::Result<()> {
         let type_ = self.disk_inode.read().type_;
         if type_ != FileType::File && type_ != FileType::SymLink {
@@ -254,6 +294,7 @@ impl vfs::INode for INodeImpl {
         self.disk_inode.write().size = len as u64;
         Ok(())
     }
+
     fn create(
         &self,
         name: &str,
@@ -279,26 +320,33 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::EntryExist);
         }
 
-        // Create new INode
+        // Create a new INode
         let inode = self.fs.new_inode(type_, mode as u16)?;
         if type_ == FileType::Dir {
             inode.dirent_init(self.id)?;
         }
-
-        // Write new entry
+        // Insert it into dir entry
         let entry = DiskEntry {
             id: inode.id as u32,
             name: Str256::from(name),
         };
         self.dirent_append(&entry)?;
+        // Append success, increase nlinks
         inode.nlinks_inc();
         if type_ == FileType::Dir {
             inode.nlinks_inc(); //for .
             self.nlinks_inc(); //for ..
         }
+        // Update metadata file to make the INode valid
+        self.fs.sync_metadata()?;
+        inode.sync_all()?;
+        // Sync the dirINode's info into file
+        // MUST sync the INode's info first, or the entry maybe invalid
+        self.sync_all()?;
 
         Ok(inode)
     }
+
     fn unlink(&self, name: &str) -> vfs::Result<()> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -317,23 +365,21 @@ impl vfs::INode for INodeImpl {
         let (inode_id, entry_id) = self.get_file_inode_and_entry_id(name)?;
         let inode = self.fs.get_inode(inode_id)?;
 
-        let type_ = inode.disk_inode.read().type_;
-        if type_ == FileType::Dir {
+        if inode.disk_inode.read().type_ == FileType::Dir {
             // only . and ..
             assert!(inode.disk_inode.read().blocks >= 2);
             if inode.disk_inode.read().blocks > 2 {
                 return Err(FsError::DirNotEmpty);
             }
         }
-        inode.nlinks_dec();
-        if type_ == FileType::Dir {
-            inode.nlinks_dec(); //for .
-            self.nlinks_dec(); //for ..
-        }
-        self.dirent_remove(entry_id)?;
-
+        // Remove it from dir entries
+        self.dirent_inode_remove(inode, entry_id)?;
+        // Sync the dirINode's info
+        // The real removal of the INode is delayed at INode's drop()
+        self.sync_all()?;
         Ok(())
     }
+
     fn link(&self, name: &str, other: &Arc<dyn INode>) -> vfs::Result<()> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -358,10 +404,16 @@ impl vfs::INode for INodeImpl {
             id: child.id as u32,
             name: Str256::from(name),
         };
+        // Insert it into dir entry
         self.dirent_append(&entry)?;
+        // Increase nlinks
         child.nlinks_inc();
+        child.sync_metadata()?;
+        // Now the INode info is valid, we can safely sync the dirINode's info
+        self.sync_all()?;
         Ok(())
     }
+
     fn move_(&self, old_name: &str, target: &Arc<dyn INode>, new_name: &str) -> vfs::Result<()> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -390,9 +442,15 @@ impl vfs::INode for INodeImpl {
         if dest_info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
-        if let Ok(dest_inode) = dest.find(new_name) {
+
+        // Get the info of the INode to be replaced
+        let to_be_replaced_inode_info = if let Ok((dest_inode_id, dest_entry_id)) =
+            dest.get_file_inode_and_entry_id(new_name)
+        {
+            let dest_inode = self.fs.get_inode(dest_inode_id)?;
             let inode = self.find(old_name)?;
             if inode.metadata()?.inode == dest_inode.metadata()?.inode {
+                // Same INode, do nothing
                 return Ok(());
             }
             let inode_type = inode.metadata()?.type_;
@@ -411,35 +469,71 @@ impl vfs::INode for INodeImpl {
                 }
                 _ => {}
             }
-            dest.unlink(new_name)?;
-        }
+            Some((dest_inode, dest_entry_id))
+        } else {
+            None
+        };
 
         let (inode_id, entry_id) = self.get_file_inode_and_entry_id(old_name)?;
         if info.inode == dest_info.inode {
-            // rename: in place modify name
+            // Move at same dirINode: just modify name
             let entry = DiskEntry {
                 id: inode_id as u32,
                 name: Str256::from(new_name),
             };
             self.file.write_direntry(entry_id, &entry)?;
+            // Replace the existing inode
+            if let Some((replace_inode, replace_entry_id)) = to_be_replaced_inode_info {
+                if let Err(e) = self.dirent_inode_remove(replace_inode, replace_entry_id) {
+                    // Recover if fail
+                    let entry = DiskEntry {
+                        id: inode_id as u32,
+                        name: Str256::from(old_name),
+                    };
+                    self.file.write_direntry(entry_id, &entry)?;
+                    return Err(e);
+                }
+            }
+            self.sync_all()?;
         } else {
-            // move
+            // Move between different dirINodes
             let inode = self.fs.get_inode(inode_id)?;
             let entry = DiskEntry {
                 id: inode_id as u32,
                 name: Str256::from(new_name),
             };
-            dest.dirent_append(&entry)?;
-            self.dirent_remove(entry_id)?;
-
-            if inode.metadata()?.type_ == vfs::FileType::Dir {
+            let new_entry_id = dest.dirent_append(&entry)?;
+            if let Err(e) = self.dirent_remove(entry_id) {
+                // Recover if fail
+                dest.dirent_remove(new_entry_id)?;
+                return Err(e);
+            }
+            // Replace the existing inode
+            if let Some((replace_inode, replace_entry_id)) = to_be_replaced_inode_info {
+                if let Err(e) = dest.dirent_inode_remove(replace_inode, replace_entry_id) {
+                    // Recover if fail
+                    let old_entry = DiskEntry {
+                        id: inode_id as u32,
+                        name: Str256::from(old_name),
+                    };
+                    self.dirent_append(&old_entry)?;
+                    dest.dirent_remove(new_entry_id)?;
+                    return Err(e);
+                }
+            }
+            if inode.disk_inode.read().type_ == FileType::Dir {
                 self.nlinks_dec();
                 dest.nlinks_inc();
             }
+            // MUST sync self's INode info before dest, or the INode may exist in both dir entries,
+            // If one unlinks the entry already, another one's unlink will panic because the nlinks is not correct
+            self.sync_all()?;
+            dest.sync_all()?;
         }
 
         Ok(())
     }
+
     fn find(&self, name: &str) -> vfs::Result<Arc<dyn vfs::INode>> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -448,6 +542,7 @@ impl vfs::INode for INodeImpl {
         let inode_id = self.get_file_inode_id(name)?;
         Ok(self.fs.get_inode(inode_id)?)
     }
+
     fn get_entry(&self, id: usize) -> vfs::Result<String> {
         if self.disk_inode.read().type_ != FileType::Dir {
             return Err(FsError::NotDir);
@@ -458,12 +553,15 @@ impl vfs::INode for INodeImpl {
         let entry = self.file.read_direntry(id)?;
         Ok(String::from(entry.name.as_ref()))
     }
+
     fn io_control(&self, _cmd: u32, _data: usize) -> vfs::Result<()> {
         Err(FsError::NotSupported)
     }
+
     fn fs(&self) -> Arc<dyn vfs::FileSystem> {
         self.fs.clone()
     }
+
     fn as_any_ref(&self) -> &dyn Any {
         self
     }
@@ -478,8 +576,12 @@ impl Drop for INodeImpl {
         self.sync_all()
             .expect("failed to sync when dropping the SEFS Inode");
         if self.disk_inode.read().nlinks == 0 {
+            // Leave the inode info exists in metadata file, following new inode will override it
             self.disk_inode.write().sync();
             self.fs.free_block(self.id);
+            self.fs
+                .sync_metadata()
+                .expect("failed to update metadata file when freeing the block");
             let disk_filename = &self.disk_inode.read().disk_filename;
             let filename = disk_filename.to_string();
             self.fs
@@ -512,18 +614,29 @@ pub struct SEFS {
 
 impl SEFS {
     /// Load SEFS
+    /// The metadata file is used to store the metadate of filesystem, the layout is as follows:
+    ///  +-------------------------------------------------------------------------------------------+
+    ///  |   block0    |  block1  | block2 | block3 | ... | blockN | blockN+1 | blockN+2 | ... | ... |
+    ///  | super_block | free_map | INode2 | INode3 | ... | INodeN | free_map | INodeN+2 | ... | ... |
+    ///  +-------------------------------------------------------------------------------------------+
+    ///  |                   Group 0                      |              Group 1               | ... |
+    ///  +-------------------------------------------------------------------------------------------+
+    /// N is the number of bits in a block.
+    /// When opening an existing SEFS, load the metadata from the file at first.
     pub fn open(
         device: Box<dyn Storage>,
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
     ) -> vfs::Result<Arc<Self>> {
         let meta_file = device.open(METAFILE_NAME)?;
+
+        // Load super block
         let super_block = meta_file.load_struct::<SuperBlock>(BLKN_SUPER)?;
         if !super_block.check() {
             return Err(FsError::WrongFs);
         }
 
-        // load free map
+        // Load free map
         let mut free_map = BitVec::with_capacity(BLKBITS * super_block.groups as usize);
         unsafe {
             free_map.set_len(BLKBITS * super_block.groups as usize);
@@ -548,6 +661,7 @@ impl SEFS {
         }
         .wrap())
     }
+
     /// Create a new SEFS
     pub fn create(
         device: Box<dyn Storage>,
@@ -570,7 +684,7 @@ impl SEFS {
             }
             bitset
         };
-        // clear the existing files in storage
+        // Clear the existing files in storage
         device.clear()?;
         let meta_file = device.create(METAFILE_NAME)?;
         meta_file.set_len(blocks * BLKSIZE)?;
@@ -597,10 +711,13 @@ impl SEFS {
         root.dirent_init(BLKN_ROOT)?;
         root.nlinks_inc(); //for .
         root.nlinks_inc(); //for ..(root's parent is itself)
+                           // Initilize the metadata file with root INode
+        sefs.sync_metadata()?;
         root.sync_all()?;
 
         Ok(sefs)
     }
+
     /// Wrap pure SEFS with Arc
     /// Used in constructors
     fn wrap(self) -> Arc<Self> {
@@ -615,12 +732,36 @@ impl SEFS {
         unsafe { Arc::from_raw(ptr) }
     }
 
+    /// Write back super block and free map if dirty
+    fn sync_metadata(&self) -> vfs::Result<()> {
+        // Sync super block
+        let mut super_block = self.super_block.write();
+        if super_block.dirty() {
+            self.meta_file
+                .write_all_at(super_block.as_buf(), BLKSIZE * BLKN_SUPER)?;
+            super_block.sync();
+        }
+        // Sync free map
+        let mut free_map = self.free_map.write();
+        if free_map.dirty() {
+            for i in 0..super_block.groups as usize {
+                let slice = &free_map.as_slice()[BLKSIZE * i..BLKSIZE * (i + 1)];
+                self.meta_file
+                    .write_all_at(slice, BLKSIZE * Self::get_freemap_block_id_of_group(i))?;
+            }
+            free_map.sync();
+        }
+        // Flush
+        self.meta_file.flush()?;
+        Ok(())
+    }
+
     /// Allocate a block, return block id
     fn alloc_block(&self) -> Option<usize> {
         let mut free_map = self.free_map.write();
         let mut super_block = self.super_block.write();
         let id = free_map.alloc().or_else(|| {
-            // allocate a new group
+            // Allocate a new group
             let new_group_id = super_block.groups as usize;
             super_block.groups += 1;
             super_block.blocks += BLKBITS as u32;
@@ -629,15 +770,17 @@ impl SEFS {
                 .set_len(super_block.groups as usize * BLKBITS * BLKSIZE)
                 .expect("failed to extend meta file");
             free_map.extend(core::iter::repeat(true).take(BLKBITS));
+            // Set the bit to false to avoid to allocate it as INode ID
             free_map.set(Self::get_freemap_block_id_of_group(new_group_id), false);
-            // allocate block again
+            // Allocate block id again
             free_map.alloc()
         });
         assert!(id.is_some(), "allocate block should always success");
         super_block.unused_blocks -= 1;
         id
     }
-    /// Free a block
+
+    /// Release a block
     fn free_block(&self, block_id: usize) {
         let mut free_map = self.free_map.write();
         assert!(!free_map[block_id]);
@@ -672,6 +815,7 @@ impl SEFS {
         self.inodes.write().insert(id, Arc::downgrade(&inode));
         Ok(inode)
     }
+
     /// Get inode by id. Load if not in memory.
     /// ** Must ensure it's a valid INode **
     fn get_inode(&self, id: INodeId) -> vfs::Result<Arc<INodeImpl>> {
@@ -714,6 +858,7 @@ impl SEFS {
         });
         self._new_inode(id, disk_inode, true)
     }
+
     fn flush_weak_inodes(&self) {
         let mut inodes = self.inodes.write();
         let remove_ids: Vec<_> = inodes
@@ -725,39 +870,24 @@ impl SEFS {
             inodes.remove(&id);
         }
     }
+
     fn get_freemap_block_id_of_group(group_id: usize) -> usize {
         BLKBITS * group_id + BLKN_FREEMAP
     }
 }
 
 impl vfs::FileSystem for SEFS {
-    /// Write back super block if dirty
+    /// Write back FS if dirty
     fn sync(&self) -> vfs::Result<()> {
-        // sync super_block
-        let mut super_block = self.super_block.write();
-        if super_block.dirty() {
-            self.meta_file
-                .write_all_at(super_block.as_buf(), BLKSIZE * BLKN_SUPER)?;
-            super_block.sync();
-        }
-        // sync free_map
-        let mut free_map = self.free_map.write();
-        if free_map.dirty() {
-            for i in 0..super_block.groups as usize {
-                let slice = &free_map.as_slice()[BLKSIZE * i..BLKSIZE * (i + 1)];
-                self.meta_file
-                    .write_all_at(slice, BLKSIZE * Self::get_freemap_block_id_of_group(i))?;
-            }
-            free_map.sync();
-        }
-        // sync all INodes
+        // Sync metadata
+        self.sync_metadata()?;
+        // Sync all INodes
         self.flush_weak_inodes();
         for inode in self.inodes.read().values() {
             if let Some(inode) = inode.upgrade() {
                 inode.sync_all()?;
             }
         }
-        self.meta_file.flush()?;
         Ok(())
     }
 
@@ -798,7 +928,7 @@ trait BitsetAlloc {
 impl BitsetAlloc for BitVec<Lsb0, u8> {
     fn alloc(&mut self) -> Option<usize> {
         // TODO: more efficient
-        let id = (0..self.len()).find(|&i| self[i]);
+        let id = self.iter().position(|&bit| bit == true);
         if let Some(id) = id {
             self.set(id, false);
         }
@@ -810,6 +940,7 @@ impl AsBuf for BitVec<Lsb0, u8> {
     fn as_buf(&self) -> &[u8] {
         self.as_ref()
     }
+
     fn as_buf_mut(&mut self) -> &mut [u8] {
         self.as_mut()
     }
