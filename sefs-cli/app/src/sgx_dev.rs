@@ -89,7 +89,7 @@ impl File for SgxFile {
     fn flush(&self) -> DevResult<()> {
         match file_flush(self.file) {
             0 => Ok(()),
-            e => {
+            _ => {
                 println!("failed to flush");
                 return Err(DeviceError);
             }

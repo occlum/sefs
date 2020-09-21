@@ -62,3 +62,5 @@ jobs:
       uses: actions-rs/cargo@v1
       with:
         command: doc
+      env:
+        RUSTDOCFLAGS: '-Dwarnings -Aunused_braces'
