@@ -20,44 +20,55 @@ mod sgx_dev;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
+    /// Path of the enclave library
+    #[structopt(short, long, parse(from_os_str))]
+    enclave: PathBuf,
     /// Command
     #[structopt(subcommand)]
     cmd: Cmd,
-
-    /// Path of enclave library
-    #[structopt(parse(from_os_str))]
-    enclave: PathBuf,
-
-    /// Image directory
-    #[structopt(parse(from_os_str))]
-    image: PathBuf,
-
-    /// Container directory
-    #[structopt(parse(from_os_str))]
-    container: PathBuf,
-
-    /// Target directory
-    #[structopt(parse(from_os_str))]
-    dir: PathBuf,
-
-    /// Integrity-only mode
-    #[structopt(short = "i", long = "integrity-only")]
-    integrity_only: bool,
 }
 
 #[derive(Debug, StructOpt)]
 enum Cmd {
     /// Create a new <image> for <dir>
     #[structopt(name = "zip")]
-    Zip,
-
+    Zip {
+        /// Source dirctory
+        #[structopt(parse(from_os_str))]
+        dir: PathBuf,
+        /// Target SEFS image directory
+        #[structopt(parse(from_os_str))]
+        image: PathBuf,
+        /// Integrity-only mode
+        #[structopt(short, long)]
+        integrity_only: bool,
+    },
     /// Unzip data from given <image> to <dir>
     #[structopt(name = "unzip")]
-    Unzip,
-
+    Unzip {
+        /// Source SEFS image directory
+        #[structopt(parse(from_os_str))]
+        image: PathBuf,
+        /// Target unzip directory
+        #[structopt(parse(from_os_str))]
+        dir: PathBuf,
+        /// Integrity-only mode
+        #[structopt(short, long)]
+        integrity_only: bool,
+    },
     /// Mount <image> overlayed with <container> to <dir>
     #[structopt(name = "mount")]
-    Mount,
+    Mount {
+        /// Image SEFS directory
+        #[structopt(parse(from_os_str))]
+        image: PathBuf,
+        /// Container SEFS directory
+        #[structopt(parse(from_os_str))]
+        container: PathBuf,
+        /// Target mount point
+        #[structopt(parse(from_os_str))]
+        dir: PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -76,24 +87,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    // open or create
-    let create = match opt.cmd {
-        Cmd::Mount => false,
-        Cmd::Zip => true,
-        Cmd::Unzip => false,
-    };
-
-    let device = sgx_dev::SgxStorage::new(enclave.geteid(), &opt.image, opt.integrity_only);
-    let image_fs = match create {
-        true => {
-            std::fs::create_dir(&opt.image)?;
-            sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
-        }
-        false => sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?,
-    };
     match opt.cmd {
-        Cmd::Mount => {
-            let mnt_dir = opt.dir.clone();
+        Cmd::Mount {
+            image,
+            container,
+            dir,
+        } => {
+            let image_fs = {
+                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, true);
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            };
+            let mnt_dir = dir.clone();
             // Ctrl-C handler
             ctrlc::set_handler(move || {
                 // Unmount the mount point will cause the "fuse::mount" return,
@@ -107,28 +111,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             })?;
             // Mount as an UnionFS
-            if opt.container.is_dir() {
+            if container.is_dir() {
                 let union_fs = {
-                    let integrity_only = false;
-                    let device =
-                        sgx_dev::SgxStorage::new(enclave.geteid(), &opt.container, integrity_only);
+                    let device = sgx_dev::SgxStorage::new(enclave.geteid(), &container, false);
                     let container_fs =
                         sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?;
                     unionfs::UnionFS::new(vec![container_fs, image_fs])?
                 };
-                fuse::mount(VfsFuse::new(union_fs), &opt.dir, &[])?
+                fuse::mount(VfsFuse::new(union_fs), &dir, &[])?;
             } else {
                 // Mount as an SEFS
-                fuse::mount(VfsFuse::new(image_fs), &opt.dir, &[])?
+                fuse::mount(VfsFuse::new(image_fs), &dir, &[])?;
             }
         }
-        Cmd::Zip => {
-            let root_inode = image_fs.root_inode();
-            zip_dir(&opt.dir, root_inode)?;
+        Cmd::Zip {
+            dir,
+            image,
+            integrity_only,
+        } => {
+            let sefs_fs = {
+                std::fs::create_dir(&image)?;
+                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, integrity_only);
+                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            };
+            zip_dir(&dir, sefs_fs.root_inode())?;
         }
-        Cmd::Unzip => {
-            std::fs::create_dir(&opt.dir)?;
-            unzip_dir(&opt.dir, image_fs.root_inode())?;
+        Cmd::Unzip {
+            image,
+            dir,
+            integrity_only,
+        } => {
+            let sefs_fs = {
+                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, integrity_only);
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            };
+            std::fs::create_dir(&dir)?;
+            unzip_dir(&dir, sefs_fs.root_inode())?;
         }
     }
     Ok(())
