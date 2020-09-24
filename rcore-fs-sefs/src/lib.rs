@@ -14,7 +14,7 @@ use core::fmt::{Debug, Error, Formatter};
 use core::mem::MaybeUninit;
 
 use bitvec::prelude::*;
-use rcore_fs::dev::TimeProvider;
+use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
 use rcore_fs::vfs::{self, FileSystem, FsError, INode, Timespec};
 use spin::RwLock;
@@ -75,16 +75,17 @@ impl Debug for INodeImpl {
 
 impl INodeImpl {
     /// Only for Dir
-    fn get_file_inode_and_entry_id(&self, name: &str) -> Option<(INodeId, usize)> {
-        (0..self.disk_inode.read().blocks as usize)
-            .map(|i| {
-                let entry = self.file.read_direntry(i).unwrap();
-                (entry, i)
-            })
-            .find(|(entry, _)| entry.name.as_ref() == name)
-            .map(|(entry, id)| (entry.id as INodeId, id))
+    fn get_file_inode_and_entry_id(&self, name: &str) -> vfs::Result<(INodeId, usize)> {
+        for entry_id in 0..self.disk_inode.read().blocks as usize {
+            let entry = self.file.read_direntry(entry_id)?;
+            if entry.name.as_ref() == name {
+                return Ok((entry.id as INodeId, entry_id));
+            }
+        }
+        Err(FsError::EntryNotFound)
     }
-    fn get_file_inode_id(&self, name: &str) -> Option<INodeId> {
+
+    fn get_file_inode_id(&self, name: &str) -> vfs::Result<INodeId> {
         self.get_file_inode_and_entry_id(name)
             .map(|(inode_id, _)| inode_id)
     }
@@ -274,7 +275,7 @@ impl vfs::INode for INodeImpl {
         }
 
         // Ensure the name is not exist
-        if !self.get_file_inode_id(name).is_none() {
+        if self.get_file_inode_id(name).is_ok() {
             return Err(FsError::EntryExist);
         }
 
@@ -313,10 +314,8 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::IsDir);
         }
 
-        let (inode_id, entry_id) = self
-            .get_file_inode_and_entry_id(name)
-            .ok_or(FsError::EntryNotFound)?;
-        let inode = self.fs.get_inode(inode_id);
+        let (inode_id, entry_id) = self.get_file_inode_and_entry_id(name)?;
+        let inode = self.fs.get_inode(inode_id)?;
 
         let type_ = inode.disk_inode.read().type_;
         if type_ == FileType::Dir {
@@ -343,7 +342,7 @@ impl vfs::INode for INodeImpl {
         if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
-        if !self.get_file_inode_id(name).is_none() {
+        if self.get_file_inode_id(name).is_ok() {
             return Err(FsError::EntryExist);
         }
         let child = other
@@ -415,9 +414,7 @@ impl vfs::INode for INodeImpl {
             dest.unlink(new_name)?;
         }
 
-        let (inode_id, entry_id) = self
-            .get_file_inode_and_entry_id(old_name)
-            .ok_or(FsError::EntryNotFound)?;
+        let (inode_id, entry_id) = self.get_file_inode_and_entry_id(old_name)?;
         if info.inode == dest_info.inode {
             // rename: in place modify name
             let entry = DiskEntry {
@@ -427,8 +424,7 @@ impl vfs::INode for INodeImpl {
             self.file.write_direntry(entry_id, &entry)?;
         } else {
             // move
-            let inode = self.fs.get_inode(inode_id);
-
+            let inode = self.fs.get_inode(inode_id)?;
             let entry = DiskEntry {
                 id: inode_id as u32,
                 name: Str256::from(new_name),
@@ -449,8 +445,8 @@ impl vfs::INode for INodeImpl {
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let inode_id = self.get_file_inode_id(name).ok_or(FsError::EntryNotFound)?;
-        Ok(self.fs.get_inode(inode_id))
+        let inode_id = self.get_file_inode_id(name)?;
+        Ok(self.fs.get_inode(inode_id)?)
     }
     fn get_entry(&self, id: usize) -> vfs::Result<String> {
         if self.disk_inode.read().type_ != FileType::Dir {
@@ -480,13 +476,16 @@ impl Drop for INodeImpl {
             .expect("failed to update mac when dropping the SEFS Inode");
 
         self.sync_all()
-            .expect("Failed to sync when dropping the SEFS Inode");
+            .expect("failed to sync when dropping the SEFS Inode");
         if self.disk_inode.read().nlinks == 0 {
             self.disk_inode.write().sync();
             self.fs.free_block(self.id);
             let disk_filename = &self.disk_inode.read().disk_filename;
             let filename = disk_filename.to_string();
-            self.fs.device.remove(filename.as_str()).unwrap();
+            self.fs
+                .device
+                .remove(filename.as_str())
+                .expect("failed to remove file");
         }
     }
 }
@@ -653,15 +652,15 @@ impl SEFS {
         id: INodeId,
         disk_inode: Dirty<DiskINode>,
         create: bool,
-    ) -> Arc<INodeImpl> {
+    ) -> vfs::Result<Arc<INodeImpl>> {
         let filename = disk_inode.disk_filename.to_string();
 
         let inode = Arc::new(INodeImpl {
             id,
             disk_inode: RwLock::new(disk_inode),
             file: match create {
-                true => self.device.create(filename.as_str()).unwrap(),
-                false => self.device.open(filename.as_str()).unwrap(),
+                true => self.device.create(filename.as_str())?,
+                false => self.device.open(filename.as_str())?,
             },
             fs: self.self_ptr.upgrade().unwrap(),
         });
@@ -671,21 +670,21 @@ impl SEFS {
             _ => {}
         };
         self.inodes.write().insert(id, Arc::downgrade(&inode));
-        inode
+        Ok(inode)
     }
     /// Get inode by id. Load if not in memory.
     /// ** Must ensure it's a valid INode **
-    fn get_inode(&self, id: INodeId) -> Arc<INodeImpl> {
+    fn get_inode(&self, id: INodeId) -> vfs::Result<Arc<INodeImpl>> {
         assert!(!self.free_map.read()[id]);
 
         // In the BTreeSet and not weak.
         if let Some(inode) = self.inodes.read().get(&id) {
             if let Some(inode) = inode.upgrade() {
-                return inode;
+                return Ok(inode);
             }
         }
         // Load if not in set, or is weak ref.
-        let disk_inode = Dirty::new(self.meta_file.load_struct::<DiskINode>(id).unwrap());
+        let disk_inode = Dirty::new(self.meta_file.load_struct::<DiskINode>(id)?);
         self._new_inode(id, disk_inode, false)
     }
 
@@ -713,7 +712,7 @@ impl SEFS {
             disk_filename: uuid,
             inode_mac: Default::default(),
         });
-        Ok(self._new_inode(id, disk_inode, true))
+        self._new_inode(id, disk_inode, true)
     }
     fn flush_weak_inodes(&self) {
         let mut inodes = self.inodes.write();
@@ -763,7 +762,7 @@ impl vfs::FileSystem for SEFS {
     }
 
     fn root_inode(&self) -> Arc<dyn vfs::INode> {
-        self.get_inode(BLKN_ROOT)
+        self.get_inode(BLKN_ROOT).unwrap()
     }
 
     fn root_mac(&self) -> vfs::FsMac {

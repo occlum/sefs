@@ -1,6 +1,7 @@
 #![cfg(any(test, feature = "std"))]
 
-use super::{DevResult, DeviceError, SefsMac, SefsUuid, UuidProvider};
+use super::{SefsMac, SefsUuid, UuidProvider};
+use rcore_fs::dev::{DevError, DevResult, EIO};
 use spin::Mutex;
 use std::fs::{read_dir, remove_file, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -67,19 +68,13 @@ impl super::Storage for StdStorage {
     }
 }
 
-impl From<std::io::Error> for DeviceError {
-    fn from(e: std::io::Error) -> Self {
-        panic!("{:?}", e);
-    }
-}
-
 impl super::File for Mutex<File> {
     fn read_at(&self, buf: &mut [u8], offset: usize) -> DevResult<usize> {
         let mut file = self.lock();
         let offset = offset as u64;
         let real_offset = file.seek(SeekFrom::Start(offset))?;
         if real_offset != offset {
-            return Err(DeviceError);
+            return Err(DevError(EIO));
         }
         let len = file.read(buf)?;
         Ok(len)
@@ -90,7 +85,7 @@ impl super::File for Mutex<File> {
         let offset = offset as u64;
         let real_offset = file.seek(SeekFrom::Start(offset))?;
         if real_offset != offset {
-            return Err(DeviceError);
+            return Err(DevError(EIO));
         }
         let len = file.write(buf)?;
         Ok(len)

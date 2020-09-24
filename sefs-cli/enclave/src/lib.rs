@@ -63,7 +63,11 @@ pub unsafe extern "C" fn ecall_file_close(file: SGX_FILE) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn ecall_file_flush(file: SGX_FILE) -> i32 {
-    sgx_fflush(file)
+    let ret = sgx_fflush(file);
+    if ret != 0 {
+        return sgx_ferror(file);
+    }
+    0
 }
 
 #[no_mangle]
