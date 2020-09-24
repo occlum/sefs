@@ -17,7 +17,7 @@ use ext2::fs::Ext2;
 use ext2::sector::{Address, Size512};
 use ext2::volume::size::Size;
 use ext2::volume::{Volume, VolumeCommit, VolumeSlice};
-use rcore_fs::dev::{DevError, Device};
+use rcore_fs::dev::{DevError, Device, EIO};
 use rcore_fs::vfs;
 
 #[derive(Clone)]
@@ -40,7 +40,7 @@ struct Ext2Error {
 impl core::convert::From<Ext2Error> for vfs::FsError {
     fn from(err: Ext2Error) -> Self {
         match err.inner {
-            _ => vfs::FsError::DeviceError,
+            _ => vfs::FsError::DeviceError(EIO),
         }
     }
 }

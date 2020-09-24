@@ -11,25 +11,41 @@ pub trait TimeProvider: Send + Sync {
 
 /// Interface for FS to read & write
 pub trait Device: Send + Sync {
-    fn read_at(&self, offset: usize, buf: &mut [u8]) -> Result<usize>;
-    fn write_at(&self, offset: usize, buf: &[u8]) -> Result<usize>;
-    fn sync(&self) -> Result<()>;
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> DevResult<usize>;
+    fn write_at(&self, offset: usize, buf: &[u8]) -> DevResult<usize>;
+    fn sync(&self) -> DevResult<()>;
 }
 
 /// Device which can only R/W in blocks
 pub trait BlockDevice: Send + Sync {
     const BLOCK_SIZE_LOG2: u8;
-    fn read_at(&self, block_id: BlockId, buf: &mut [u8]) -> Result<()>;
-    fn write_at(&self, block_id: BlockId, buf: &[u8]) -> Result<()>;
-    fn sync(&self) -> Result<()>;
+    fn read_at(&self, block_id: BlockId, buf: &mut [u8]) -> DevResult<()>;
+    fn write_at(&self, block_id: BlockId, buf: &[u8]) -> DevResult<()>;
+    fn sync(&self) -> DevResult<()>;
 }
+
+pub const EIO: i32 = 5;
+pub const EINVAL: i32 = 22;
 
 /// The error type for device.
 #[derive(Debug, PartialEq, Eq)]
-pub struct DevError;
+pub struct DevError(pub i32);
 
-/// A specialized `Result` type for device.
-pub type Result<T> = core::result::Result<T, DevError>;
+pub trait ToDevError {
+    fn errno(&self) -> i32;
+}
+
+impl<T> From<T> for DevError
+where
+    T: ToDevError + 'static,
+{
+    fn from(t: T) -> DevError {
+        DevError(t.errno())
+    }
+}
+
+/// A specialized `DevResult` type for device.
+pub type DevResult<T> = core::result::Result<T, DevError>;
 
 pub type BlockId = usize;
 
@@ -43,7 +59,7 @@ macro_rules! try0 {
 
 /// Helper functions to R/W BlockDevice in bytes
 impl<T: BlockDevice> Device for T {
-    fn read_at(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> DevResult<usize> {
         let iter = BlockIter {
             begin: offset,
             end: offset + buf.len(),
@@ -70,7 +86,7 @@ impl<T: BlockDevice> Device for T {
         Ok(buf.len())
     }
 
-    fn write_at(&self, offset: usize, buf: &[u8]) -> Result<usize> {
+    fn write_at(&self, offset: usize, buf: &[u8]) -> DevResult<usize> {
         let iter = BlockIter {
             begin: offset,
             end: offset + buf.len(),
@@ -99,7 +115,7 @@ impl<T: BlockDevice> Device for T {
         Ok(buf.len())
     }
 
-    fn sync(&self) -> Result<()> {
+    fn sync(&self) -> DevResult<()> {
         BlockDevice::sync(self)
     }
 }
@@ -111,23 +127,23 @@ mod test {
 
     impl BlockDevice for Mutex<[u8; 16]> {
         const BLOCK_SIZE_LOG2: u8 = 2;
-        fn read_at(&self, block_id: BlockId, buf: &mut [u8]) -> Result<()> {
+        fn read_at(&self, block_id: BlockId, buf: &mut [u8]) -> DevResult<()> {
             if block_id >= 4 {
-                return Err(DevError);
+                return Err(DevError(EINVAL));
             }
             let begin = block_id << 2;
             buf[..4].copy_from_slice(&mut self.lock().unwrap()[begin..begin + 4]);
             Ok(())
         }
-        fn write_at(&self, block_id: BlockId, buf: &[u8]) -> Result<()> {
+        fn write_at(&self, block_id: BlockId, buf: &[u8]) -> DevResult<()> {
             if block_id >= 4 {
-                return Err(DevError);
+                return Err(DevError(EINVAL));
             }
             let begin = block_id << 2;
             self.lock().unwrap()[begin..begin + 4].copy_from_slice(&buf[..4]);
             Ok(())
         }
-        fn sync(&self) -> Result<()> {
+        fn sync(&self) -> DevResult<()> {
             Ok(())
         }
     }

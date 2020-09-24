@@ -1,5 +1,6 @@
 use rcore_fs_sefs::dev::SefsMac;
-use rcore_fs_sefs::dev::{DevResult, DeviceError, File, Storage};
+use rcore_fs_sefs::dev::{File, Storage};
+use rcore_fs::dev::{DevResult, DevError, EINVAL};
 use sgx_types::*;
 use std::fs::{read_dir, remove_file};
 use std::io;
@@ -76,7 +77,7 @@ impl File for SgxFile {
                 len,
                 buf.len()
             );
-            return Err(DeviceError);
+            return Err(DevError(EINVAL));
         }
         Ok(len)
     }
@@ -89,9 +90,9 @@ impl File for SgxFile {
     fn flush(&self) -> DevResult<()> {
         match file_flush(self.file) {
             0 => Ok(()),
-            _ => {
+            e => {
                 println!("failed to flush");
-                return Err(DeviceError);
+                return Err(DevError(e));
             }
         }
     }
@@ -182,7 +183,7 @@ fn file_open(path: &str, create: bool, integrity_only: bool) -> DevResult<usize>
             "failed to open SGX protected file: {}, error: {:?}",
             path, error
         );
-        return Err(DeviceError);
+        return Err(DevError::from(error));
     }
     Ok(ret_val)
 }

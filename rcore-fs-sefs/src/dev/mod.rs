@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use core::fmt::{Debug, Error, Formatter};
-use rcore_fs::vfs::FsError;
+use rcore_fs::dev::{DevError, DevResult, EIO};
 
 #[cfg(any(test, feature = "std"))]
 pub use self::std_impl::*;
@@ -22,7 +22,7 @@ pub trait File: Send + Sync {
         if len == buf.len() {
             Ok(())
         } else {
-            Err(DeviceError)
+            Err(DevError(EIO))
         }
     }
     fn write_all_at(&self, buf: &[u8], offset: usize) -> DevResult<()> {
@@ -30,7 +30,7 @@ pub trait File: Send + Sync {
         if len == buf.len() {
             Ok(())
         } else {
-            Err(DeviceError)
+            Err(DevError(EIO))
         }
     }
 }
@@ -95,16 +95,5 @@ impl alloc::string::ToString for SefsMac {
 impl Debug for SefsMac {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         write!(f, "{}", self.to_string())
-    }
-}
-
-#[derive(Debug)]
-pub struct DeviceError;
-
-pub type DevResult<T> = Result<T, DeviceError>;
-
-impl From<DeviceError> for FsError {
-    fn from(_: DeviceError) -> Self {
-        FsError::DeviceError
     }
 }

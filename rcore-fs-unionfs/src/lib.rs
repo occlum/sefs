@@ -17,6 +17,7 @@ use alloc::{
 };
 use core::any::Any;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use rcore_fs::dev::{DevError, EIO};
 use rcore_fs::vfs::*;
 use spin::RwLock;
 
@@ -367,7 +368,7 @@ impl UnionINodeInner {
                             match last_file_inode.write_at(offset, &buf[..len]) {
                                 Ok(len_written) if len_written != len => {
                                     last_inode.unlink(last_inode_name)?;
-                                    return Err(FsError::DeviceError);
+                                    return Err(FsError::from(DevError(EIO)));
                                 }
                                 Err(e) => {
                                     last_inode.unlink(last_inode_name)?;
@@ -392,7 +393,7 @@ impl UnionINodeInner {
                         match last_link_inode.write_at(0, &data) {
                             Ok(len_written) if len_written != data.len() => {
                                 last_inode.unlink(last_inode_name)?;
-                                return Err(FsError::DeviceError);
+                                return Err(FsError::from(DevError(EIO)));
                             }
                             Err(e) => {
                                 last_inode.unlink(last_inode_name)?;

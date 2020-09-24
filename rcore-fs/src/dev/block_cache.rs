@@ -73,7 +73,7 @@ impl<T: BlockDevice> BlockCache<T> {
     }
 
     /// Write back data if buffer is dirty
-    fn write_back(&self, buf: &mut Buf) -> Result<()> {
+    fn write_back(&self, buf: &mut Buf) -> DevResult<()> {
         if let BufStatus::Dirty(block_id) = buf.status {
             self.device.write_at(block_id, &buf.data)?;
             buf.status = BufStatus::Valid(block_id);
@@ -91,7 +91,7 @@ impl<T: BlockDevice> Drop for BlockCache<T> {
 impl<T: BlockDevice> BlockDevice for BlockCache<T> {
     const BLOCK_SIZE_LOG2: u8 = T::BLOCK_SIZE_LOG2;
 
-    fn read_at(&self, block_id: BlockId, buffer: &mut [u8]) -> Result<()> {
+    fn read_at(&self, block_id: BlockId, buffer: &mut [u8]) -> DevResult<()> {
         let mut buf = self.get_buf(block_id);
         match buf.status {
             BufStatus::Unused => {
@@ -106,7 +106,7 @@ impl<T: BlockDevice> BlockDevice for BlockCache<T> {
         Ok(())
     }
 
-    fn write_at(&self, block_id: BlockId, buffer: &[u8]) -> Result<()> {
+    fn write_at(&self, block_id: BlockId, buffer: &[u8]) -> DevResult<()> {
         let mut buf = self.get_buf(block_id);
         buf.status = BufStatus::Dirty(block_id);
         let len = 1 << Self::BLOCK_SIZE_LOG2 as usize;
@@ -114,7 +114,7 @@ impl<T: BlockDevice> BlockDevice for BlockCache<T> {
         Ok(())
     }
 
-    fn sync(&self) -> Result<()> {
+    fn sync(&self) -> DevResult<()> {
         for buf in self.bufs.iter() {
             self.write_back(&mut buf.lock())?;
         }

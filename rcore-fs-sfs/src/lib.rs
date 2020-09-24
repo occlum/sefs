@@ -18,7 +18,7 @@ use core::mem::MaybeUninit;
 use bitvec::prelude::*;
 use spin::RwLock;
 
-use rcore_fs::dev::Device;
+use rcore_fs::dev::{DevError, Device, EIO};
 use rcore_fs::dirty::Dirty;
 use rcore_fs::util::*;
 use rcore_fs::vfs::{self, FileSystem, FsError, INode, Timespec};
@@ -410,7 +410,7 @@ impl vfs::INode for INodeImpl {
                 let device_inode = device_inodes.get(&self.device_inode_id);
                 match device_inode {
                     Some(device) => device.read_at(offset, buf),
-                    None => Err(FsError::DeviceError),
+                    None => Err(FsError::from(DevError(EIO))),
                 }
             }
             _ => Err(FsError::NotFile),
@@ -431,7 +431,7 @@ impl vfs::INode for INodeImpl {
                 let device_inode = device_inodes.get(&self.device_inode_id);
                 match device_inode {
                     Some(device) => device.write_at(offset, buf),
-                    None => Err(FsError::DeviceError),
+                    None => Err(FsError::from(DevError(EIO))),
                 }
             }
             _ => Err(FsError::NotFile),

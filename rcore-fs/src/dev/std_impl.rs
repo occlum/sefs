@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::*;
 
 impl Device for Mutex<File> {
-    fn read_at(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read_at(&self, offset: usize, buf: &mut [u8]) -> DevResult<usize> {
         let offset = offset as u64;
         let mut file = self.lock().unwrap();
         file.seek(SeekFrom::Start(offset))?;
@@ -16,7 +16,7 @@ impl Device for Mutex<File> {
         Ok(len)
     }
 
-    fn write_at(&self, offset: usize, buf: &[u8]) -> Result<usize> {
+    fn write_at(&self, offset: usize, buf: &[u8]) -> DevResult<usize> {
         let offset = offset as u64;
         let mut file = self.lock().unwrap();
         file.seek(SeekFrom::Start(offset))?;
@@ -24,7 +24,7 @@ impl Device for Mutex<File> {
         Ok(len)
     }
 
-    fn sync(&self) -> Result<()> {
+    fn sync(&self) -> DevResult<()> {
         let file = self.lock().unwrap();
         file.sync_all()?;
         Ok(())
@@ -43,8 +43,12 @@ impl TimeProvider for StdTimeProvider {
     }
 }
 
-impl From<Error> for DevError {
-    fn from(_: Error) -> Self {
-        DevError
+impl ToDevError for Error {
+    fn errno(&self) -> i32 {
+        if let Some(err) = self.raw_os_error() {
+            err
+        } else {
+            EIO
+        }
     }
 }
