@@ -43,12 +43,12 @@ impl TimeProvider for StdTimeProvider {
     }
 }
 
-impl ToDevError for Error {
-    fn errno(&self) -> i32 {
-        if let Some(err) = self.raw_os_error() {
-            err
+impl From<Error> for DevError {
+    fn from(e: Error) -> Self {
+        if let Some(err) = e.raw_os_error() {
+            DevError(err)
         } else {
-            EIO
+            DevError(EIO)
         }
     }
 }
