@@ -31,19 +31,6 @@ pub const EINVAL: i32 = 22;
 #[derive(Debug, PartialEq, Eq)]
 pub struct DevError(pub i32);
 
-pub trait ToDevError {
-    fn errno(&self) -> i32;
-}
-
-impl<T> From<T> for DevError
-where
-    T: ToDevError + 'static,
-{
-    fn from(t: T) -> DevError {
-        DevError(t.errno())
-    }
-}
-
 /// A specialized `DevResult` type for device.
 pub type DevResult<T> = core::result::Result<T, DevError>;
 
