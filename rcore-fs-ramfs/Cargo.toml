@@ -8,3 +8,4 @@ edition = "2018"
 rcore-fs = { path = "../rcore-fs" }
 spin = "0.5"
 log = "0.4"
+lazy_static = "1.4.0"
