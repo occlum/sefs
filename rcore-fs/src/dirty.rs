@@ -54,13 +54,6 @@ impl<T> DerefMut for Dirty<T> {
     }
 }
 
-impl<T> Drop for Dirty<T> {
-    /// Guard it is not dirty when dropping
-    fn drop(&mut self) {
-        assert!(!self.dirty, "data dirty when dropping");
-    }
-}
-
 impl<T: Debug> Debug for Dirty<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
         let tag = if self.dirty { "Dirty" } else { "Clean" };
