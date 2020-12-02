@@ -689,11 +689,6 @@ impl SEFS {
         let meta_file = device.create(METAFILE_NAME)?;
         meta_file.set_len(blocks * BLKSIZE)?;
 
-        let mode = match device.is_integrity_only() {
-            true => 0o444,
-            false => 0o644,
-        };
-
         let sefs = SEFS {
             super_block: RwLock::new(Dirty::new_dirty(super_block)),
             free_map: RwLock::new(Dirty::new_dirty(free_map)),
@@ -706,7 +701,7 @@ impl SEFS {
         }
         .wrap();
         // Init root INode
-        let root = sefs.new_inode(FileType::Dir, mode)?;
+        let root = sefs.new_inode(FileType::Dir, 0o755)?;
         assert_eq!(root.id, BLKN_ROOT);
         root.dirent_init(BLKN_ROOT)?;
         root.nlinks_inc(); //for .
