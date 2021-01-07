@@ -1,4 +1,5 @@
 use crate::dev::DevError;
+use alloc::vec;
 use alloc::{string::String, sync::Arc, vec::Vec};
 use core::any::Any;
 use core::fmt;
@@ -187,6 +188,15 @@ pub trait INode: Any + Sync + Send {
             buf.set_len(size);
         }
         self.read_at(0, buf.as_mut_slice())?;
+        Ok(buf)
+    }
+
+    /// Read elf64 file in to a vector lazily (by only reading the elf header)
+    fn read_elf64_lazy_as_vec(&self) -> Result<Vec<u8>> {
+        let size = self.metadata()?.size;
+        let mut buf = vec![0; size];
+        let elf64_hdr_size = 64;
+        self.read_at(0, &mut buf.as_mut_slice()[..elf64_hdr_size])?;
         Ok(buf)
     }
 }
