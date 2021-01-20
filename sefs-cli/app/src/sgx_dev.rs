@@ -1,6 +1,6 @@
+use rcore_fs::dev::{DevError, DevResult, EINVAL};
 use rcore_fs_sefs::dev::SefsMac;
 use rcore_fs_sefs::dev::{File, Storage};
-use rcore_fs::dev::{DevResult, DevError, EINVAL};
 use sgx_types::*;
 use std::fs::{read_dir, remove_file};
 use std::io;
@@ -9,17 +9,63 @@ use std::path::*;
 
 pub struct SgxStorage {
     path: PathBuf,
-    integrity_only: bool,
+    mode: EncryptMode,
+}
+
+pub enum EncryptMode {
+    IntegrityOnly,
+    EncryptWithIntegrity(sgx_key_128bit_t),
+    Encrypt(sgx_key_128bit_t),
+    EncryptAutoKey,
+}
+
+impl EncryptMode {
+    pub fn from_parameters(
+        protect_integrity: bool,
+        key: &Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        match (protect_integrity, key) {
+            (true, None) => Ok(EncryptMode::IntegrityOnly),
+            (true, Some(key_str)) => {
+                let key = Self::parse_key(&key_str)?;
+                Ok(EncryptMode::EncryptWithIntegrity(key))
+            }
+            (false, None) => Ok(EncryptMode::EncryptAutoKey),
+            (false, Some(key_str)) => {
+                let key = Self::parse_key(&key_str)?;
+                Ok(EncryptMode::Encrypt(key))
+            }
+        }
+    }
+
+    fn parse_key(key_str: &str) -> Result<sgx_key_128bit_t, Box<dyn std::error::Error>> {
+        let bytes_str_vec = {
+            let bytes_str_vec: Vec<&str> = key_str.split("-").collect();
+            if bytes_str_vec.len() != std::mem::size_of::<sgx_key_128bit_t>() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "The length or format of Key string is invalid",
+                )));
+            }
+            bytes_str_vec
+        };
+
+        let mut key: sgx_key_128bit_t = Default::default();
+        for (byte_i, byte_str) in bytes_str_vec.iter().enumerate() {
+            key[byte_i] = u8::from_str_radix(byte_str, 16)?;
+        }
+        Ok(key)
+    }
 }
 
 impl SgxStorage {
-    pub fn new(eid: sgx_enclave_id_t, path: impl AsRef<Path>, integrity_only: bool) -> Self {
+    pub fn new(eid: sgx_enclave_id_t, path: impl AsRef<Path>, mode: EncryptMode) -> Self {
         unsafe {
             EID = eid;
         }
         SgxStorage {
             path: path.as_ref().to_path_buf(),
-            integrity_only: integrity_only,
+            mode,
         }
     }
 }
@@ -28,14 +74,14 @@ impl Storage for SgxStorage {
     fn open(&self, file_id: &str) -> DevResult<Box<dyn File>> {
         let mut path = self.path.clone();
         path.push(file_id);
-        let file = file_open(path.to_str().unwrap(), false, self.integrity_only)?;
+        let file = file_open(path.to_str().unwrap(), false, &self.mode)?;
         Ok(Box::new(SgxFile { file }))
     }
 
     fn create(&self, file_id: &str) -> DevResult<Box<dyn File>> {
         let mut path = self.path.clone();
         path.push(file_id);
-        let file = file_open(path.to_str().unwrap(), true, self.integrity_only)?;
+        let file = file_open(path.to_str().unwrap(), true, &self.mode)?;
         Ok(Box::new(SgxFile { file }))
     }
 
@@ -46,8 +92,12 @@ impl Storage for SgxStorage {
         Ok(())
     }
 
-    fn is_integrity_only(&self) -> bool {
-        self.integrity_only
+    fn protect_integrity(&self) -> bool {
+        match self.mode {
+            EncryptMode::IntegrityOnly => true,
+            EncryptMode::EncryptWithIntegrity(_) => true,
+            _ => false,
+        }
     }
 
     fn clear(&self) -> DevResult<()> {
@@ -120,7 +170,8 @@ extern "C" {
         error: *mut i32,
         path: *const u8,
         create: uint8_t,
-        integrity_only: i32,
+        protect_integrity: uint8_t,
+        key: *const sgx_key_128bit_t,
     ) -> sgx_status_t;
     fn ecall_file_close(eid: sgx_enclave_id_t, retval: *mut i32, fd: size_t) -> sgx_status_t;
     fn ecall_file_flush(eid: sgx_enclave_id_t, retval: *mut i32, fd: size_t) -> sgx_status_t;
@@ -162,8 +213,14 @@ fn file_get_mac(fd: usize, mac: *mut sgx_aes_gcm_128bit_tag_t) -> usize {
     ret_val as usize
 }
 
-fn file_open(path: &str, create: bool, integrity_only: bool) -> DevResult<usize> {
+fn file_open(path: &str, create: bool, mode: &EncryptMode) -> DevResult<usize> {
     let cpath = format!("{}\0", path);
+    let (protect_integrity, key_ptr) = match mode {
+        EncryptMode::IntegrityOnly => (true, std::ptr::null()),
+        EncryptMode::EncryptWithIntegrity(key) => (true, key as *const sgx_key_128bit_t),
+        EncryptMode::Encrypt(key) => (false, key as *const sgx_key_128bit_t),
+        EncryptMode::EncryptAutoKey => (false, std::ptr::null()),
+    };
     let mut ret_val = 0;
     let mut error = 0;
     unsafe {
@@ -173,7 +230,8 @@ fn file_open(path: &str, create: bool, integrity_only: bool) -> DevResult<usize>
             &mut error,
             cpath.as_ptr(),
             create as uint8_t,
-            integrity_only as i32,
+            protect_integrity as uint8_t,
+            key_ptr,
         );
         assert_eq!(ret, sgx_status_t::SGX_SUCCESS);
     }

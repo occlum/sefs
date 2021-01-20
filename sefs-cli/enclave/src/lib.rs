@@ -30,17 +30,21 @@ pub unsafe extern "C" fn ecall_file_open(
     error: *mut i32,
     path: *const u8,
     create: bool,
-    _integrity_only: i32,
+    protect_integrity: bool,
+    key: *const SGX_KEY,
 ) -> *mut u8 {
-    let integrity_only = if _integrity_only != 0 { true } else { false };
     let mode = match create {
         true => "w+b\0",
         false => "r+b\0",
     };
-    let file = if !integrity_only {
-        sgx_fopen_auto_key(path, mode.as_ptr())
+    let file = if !key.is_null() {
+        sgx_fopen(path, mode.as_ptr(), key)
     } else {
-        sgx_fopen_integrity_only(path, mode.as_ptr())
+        if protect_integrity {
+            sgx_fopen_integrity_only(path, mode.as_ptr())
+        } else {
+            sgx_fopen_auto_key(path, mode.as_ptr())
+        }
     };
     if file.is_null() {
         *error = errno();
