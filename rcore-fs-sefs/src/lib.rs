@@ -162,7 +162,7 @@ impl INodeImpl {
 
     #[cfg(feature = "create_image")]
     pub fn update_mac(&self) -> vfs::Result<()> {
-        if self.fs.device.is_integrity_only() {
+        if self.fs.device.protect_integrity() {
             self.disk_inode.write().inode_mac = self.file.get_file_mac().unwrap();
             //println!("file_mac {:?}", self.disk_inode.read().inode_mac);
             self.sync_all()?;
@@ -172,7 +172,7 @@ impl INodeImpl {
 
     #[cfg(not(feature = "create_image"))]
     fn check_integrity(&self) {
-        if self.fs.device.is_integrity_only() {
+        if self.fs.device.protect_integrity() {
             let inode_mac = &self.disk_inode.read().inode_mac;
             let file_mac = self.file.get_file_mac().unwrap();
             //info!("inode_mac {:?}, file_mac {:?}", inode_mac, file_mac);
@@ -830,12 +830,13 @@ impl SEFS {
     /// Create a new INode file
     fn new_inode(&self, type_: FileType, mode: u16) -> vfs::Result<Arc<INodeImpl>> {
         let id = self.alloc_block().ok_or(FsError::NoDeviceSpace)?;
-        let (time, uuid) = match self.device.is_integrity_only() {
-            true => (0, SefsUuid::from(id)),
-            false => (
+        let (time, uuid) = if cfg!(feature = "create_image") && self.device.protect_integrity() {
+            (0, SefsUuid::from(id))
+        } else {
+            (
                 self.time_provider.current_time().sec as u32,
                 self.uuid_provider.generate_uuid(),
-            ),
+            )
         };
         let disk_inode = Dirty::new_dirty(DiskINode {
             size: 0,
