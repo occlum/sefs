@@ -93,29 +93,25 @@ const KB: usize = 1024;
 const CHUNK_LEN: usize = 4 * KB;
 
 struct Content {
-    data: Vec<Option<Vec<u8>>>,
+    /// The file contect is devided into fixed-size chunks.
+    /// Empty chunk is initialized as `Vec::default()` which does not take up space.
+    chunks: Vec<Vec<u8>>,
 }
 
 impl Content {
     fn new() -> Self {
-        Self { data: Vec::new() }
+        Self { chunks: Vec::new() }
     }
 
     fn len(&self) -> usize {
-        let cur_chunk_cnt = self.chunk_cnt();
-        if cur_chunk_cnt > 0 {
-            CHUNK_LEN * (cur_chunk_cnt - 1) + self.data[cur_chunk_cnt - 1].as_ref().unwrap().len()
-        } else {
-            0
+        match self.chunks.last() {
+            Some(last_chunk) => CHUNK_LEN * (self.chunks.len() - 1) + last_chunk.len(),
+            None => 0,
         }
     }
 
-    fn chunk_cnt(&self) -> usize {
-        self.data.len()
-    }
-
     fn resize_zero(&mut self, new_len: usize) {
-        let cur_chunk_cnt = self.chunk_cnt();
+        let cur_chunk_cnt = self.chunks.len();
         let new_chunk_cnt = (new_len + CHUNK_LEN - 1) / CHUNK_LEN;
         let tail_chunk_len = {
             let offset = new_len % CHUNK_LEN;
@@ -130,7 +126,7 @@ impl Content {
 
         if new_chunk_cnt > cur_chunk_cnt {
             // Expand the chunks
-            self.data.resize(new_chunk_cnt, None);
+            self.chunks.resize_with(new_chunk_cnt, Vec::default);
             // The chunks between cur_chunk_idx(cur_chunk_cnt - 1) and
             // new_chunk_idx(new_chunk_cnt - 1) are hole, we do not
             // need to initialize the hole until write data into it, so
@@ -138,27 +134,20 @@ impl Content {
             // Subsequent reads of the data in the hole will return null bytes.
             if cur_chunk_cnt > 0 {
                 // Resize current tail chunk, it MUST have been initialized
-                self.data[cur_chunk_cnt - 1]
-                    .as_mut()
-                    .unwrap()
-                    .resize(CHUNK_LEN, 0);
+                self.chunks[cur_chunk_cnt - 1].resize(CHUNK_LEN, 0);
             }
             // Initialize the new tail chunk
-            self.data[new_chunk_cnt - 1] = Some(Self::new_empty_chunk_with_len(tail_chunk_len));
+            self.chunks[new_chunk_cnt - 1] = Self::new_empty_chunk_with_len(tail_chunk_len);
         } else {
             // Truncate the number of chunks
-            self.data.truncate(new_chunk_cnt);
+            self.chunks.truncate(new_chunk_cnt);
             if new_chunk_cnt > 0 {
-                if self.data[new_chunk_cnt - 1].is_none() {
+                if self.chunks[new_chunk_cnt - 1].is_empty() {
                     // Chunk is a hole, initialize it
-                    self.data[new_chunk_cnt - 1] =
-                        Some(Self::new_empty_chunk_with_len(tail_chunk_len));
+                    self.chunks[new_chunk_cnt - 1] = Self::new_empty_chunk_with_len(tail_chunk_len);
                 } else {
                     // Resize new tail chunk
-                    self.data[new_chunk_cnt - 1]
-                        .as_mut()
-                        .unwrap()
-                        .resize(tail_chunk_len, 0);
+                    self.chunks[new_chunk_cnt - 1].resize(tail_chunk_len, 0);
                 }
             }
         }
@@ -175,15 +164,12 @@ impl Content {
         let chunk_idx = offset / CHUNK_LEN;
         let chunk_offset = offset % CHUNK_LEN;
         let copy_len = (CHUNK_LEN - chunk_offset).min(src.len());
-        if self.data[chunk_idx].is_none() {
+        if self.chunks[chunk_idx].is_empty() {
             // Chunk is a hole, initialize it from slice
-            self.data[chunk_idx] = Some(Self::new_chunk_from_slice_at_offset(
-                &src[..copy_len],
-                chunk_offset,
-            ))
+            self.chunks[chunk_idx] =
+                Self::new_chunk_from_slice_at_offset(&src[..copy_len], chunk_offset)
         } else {
-            let target =
-                &mut self.data[chunk_idx].as_mut().unwrap()[chunk_offset..chunk_offset + copy_len];
+            let target = &mut self.chunks[chunk_idx][chunk_offset..chunk_offset + copy_len];
             let buf = &src[..copy_len];
             target.copy_from_slice(buf)
         }
@@ -193,14 +179,12 @@ impl Content {
             let mut offset = copy_len;
             while src.len() > offset {
                 let copy_len = (src.len() - offset).min(CHUNK_LEN);
-                if self.data[chunk_idx].is_none() {
+                if self.chunks[chunk_idx].is_empty() {
                     // Chunk is a hole, initialize it from slice
-                    self.data[chunk_idx] = Some(Self::new_chunk_from_slice_at_offset(
-                        &src[offset..offset + copy_len],
-                        0,
-                    ))
+                    self.chunks[chunk_idx] =
+                        Self::new_chunk_from_slice_at_offset(&src[offset..offset + copy_len], 0)
                 } else {
-                    let target = &mut self.data[chunk_idx].as_mut().unwrap()[..copy_len];
+                    let target = &mut self.chunks[chunk_idx][..copy_len];
                     let buf = &src[offset..offset + copy_len];
                     target.copy_from_slice(buf);
                 }
@@ -223,15 +207,14 @@ impl Content {
         let chunk_idx = start / CHUNK_LEN;
         let chunk_offset = start % CHUNK_LEN;
         let copy_len = (CHUNK_LEN - chunk_offset).min(len);
-        if self.data[chunk_idx].is_none() {
+        if self.chunks[chunk_idx].is_empty() {
             // Chunk is a hole, set null bytes
             for item in target.iter_mut().take(copy_len) {
                 *item = 0;
             }
         } else {
-            target[..copy_len].copy_from_slice(
-                &self.data[chunk_idx].as_ref().unwrap()[chunk_offset..chunk_offset + copy_len],
-            );
+            target[..copy_len]
+                .copy_from_slice(&self.chunks[chunk_idx][chunk_offset..chunk_offset + copy_len]);
         }
 
         if copy_len < len {
@@ -239,14 +222,14 @@ impl Content {
             let mut offset = copy_len;
             while len > offset {
                 let copy_len = (len - offset).min(CHUNK_LEN);
-                if self.data[chunk_idx].is_none() {
+                if self.chunks[chunk_idx].is_empty() {
                     // Chunk is a hole, set null bytes
                     for item in target.iter_mut().skip(offset).take(copy_len) {
                         *item = 0;
                     }
                 } else {
                     target[offset..offset + copy_len]
-                        .copy_from_slice(&self.data[chunk_idx].as_ref().unwrap()[..copy_len]);
+                        .copy_from_slice(&self.chunks[chunk_idx][..copy_len]);
                 }
                 chunk_idx += 1;
                 offset += copy_len;
