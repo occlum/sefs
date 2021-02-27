@@ -1,12 +1,9 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![deny(warnings)]
 
-#[macro_use]
+// #[macro_use]
 extern crate alloc;
 extern crate log;
-
-#[macro_use]
-extern crate lazy_static;
 
 use alloc::{
     collections::BTreeMap,
@@ -94,11 +91,6 @@ impl RamFS {
 
 const KB: usize = 1024;
 const CHUNK_LEN: usize = 4 * KB;
-// ZERO_CHUNK is used to initialize the holes in the file content.
-// It is fast to initialize a vector by extending it with the contents of an iterator.
-lazy_static! {
-    static ref ZERO_CHUNK: Vec<u8> = vec![0; CHUNK_LEN];
-}
 
 struct Content {
     data: Vec<Option<Vec<u8>>>,
@@ -266,16 +258,16 @@ impl Content {
     fn new_empty_chunk_with_len(len: usize) -> Vec<u8> {
         assert!(len <= CHUNK_LEN);
         let mut vec = Vec::with_capacity(CHUNK_LEN);
-        vec.extend(&ZERO_CHUNK[..len]);
+        vec.resize(len, 0);
         vec
     }
 
     fn new_chunk_from_slice_at_offset(src: &[u8], offset: usize) -> Vec<u8> {
         assert!(src.len() <= CHUNK_LEN);
         let mut vec = Vec::with_capacity(CHUNK_LEN);
-        vec.extend(&ZERO_CHUNK[..offset]);
+        vec.resize(offset, 0);
         vec.extend(src);
-        vec.extend(&ZERO_CHUNK[offset + src.len()..]);
+        vec.resize(CHUNK_LEN, 0);
         vec
     }
 }
