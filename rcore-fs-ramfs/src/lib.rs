@@ -15,7 +15,7 @@ use alloc::{
 use core::any::Any;
 use core::sync::atomic::*;
 use rcore_fs::vfs::*;
-use spin::RwLock;
+use spin::{RwLock, RwLockWriteGuard};
 
 pub struct RamFS {
     root: Arc<LockedINode>,
@@ -345,16 +345,7 @@ impl INode for LockedINode {
             .downcast_ref::<LockedINode>()
             .ok_or(FsError::NotSameFs)?;
 
-        let (mut file, mut other) = if self.0.read().extra.inode < other.0.read().extra.inode {
-            let file = self.0.write();
-            let other = other.0.write();
-            (file, other)
-        } else {
-            let other = other.0.write();
-            let file = self.0.write();
-            (file, other)
-        };
-
+        let (mut file, mut other) = write_lock_two_inodes(self, other);
         if file.extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
@@ -386,15 +377,7 @@ impl INode for LockedINode {
             return Err(FsError::DirNotEmpty);
         }
 
-        let (mut file, mut other) = if self.0.read().extra.inode < other.0.read().extra.inode {
-            let file = self.0.write();
-            let other = other.0.write();
-            (file, other)
-        } else {
-            let other = other.0.write();
-            let file = self.0.write();
-            (file, other)
-        };
+        let (mut file, mut other) = write_lock_two_inodes(self, other);
         other.extra.nlinks -= 1;
         file.children.remove(name);
         Ok(())
@@ -447,16 +430,7 @@ impl INode for LockedINode {
             );
             file.children.remove(old_name);
         } else {
-            let (mut file, mut target) = if self.0.read().extra.inode < target.0.read().extra.inode
-            {
-                let file = self.0.write();
-                let target = target.0.write();
-                (file, target)
-            } else {
-                let target = target.0.write();
-                let file = self.0.write();
-                (file, target)
-            };
+            let (mut file, mut target) = write_lock_two_inodes(self, target);
             target.children.insert(
                 String::from(new_name),
                 inode.0.read().this.upgrade().unwrap(),
@@ -512,5 +486,23 @@ impl INode for LockedINode {
 
     fn as_any_ref(&self) -> &dyn Any {
         self
+    }
+}
+
+fn write_lock_two_inodes<'a>(
+    this: &'a LockedINode,
+    other: &'a LockedINode,
+) -> (
+    RwLockWriteGuard<'a, RamFSINode>,
+    RwLockWriteGuard<'a, RamFSINode>,
+) {
+    if this.0.read().extra.inode < other.0.read().extra.inode {
+        let this = this.0.write();
+        let other = other.0.write();
+        (this, other)
+    } else {
+        let other = other.0.write();
+        let this = this.0.write();
+        (this, other)
     }
 }
