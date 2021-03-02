@@ -296,6 +296,23 @@ impl vfs::INode for INodeImpl {
         Ok(())
     }
 
+    fn fallocate(&self, mode: u32, offset: u64, len: u64) -> vfs::Result<()> {
+        if self.disk_inode.read().type_ != FileType::File {
+            return Err(FsError::NotFile);
+        }
+        // TODO: Support more modes of fallocate
+        if mode != 0 {
+            return Err(FsError::NotSupported);
+        }
+        let new_size = offset.checked_add(len).ok_or_else(|| FsError::FileTooBig)?;
+        let mut inode = self.disk_inode.write();
+        if new_size > inode.size {
+            self.file.set_len(new_size as usize)?;
+            inode.size = new_size;
+        }
+        Ok(())
+    }
+
     fn resize(&self, len: usize) -> vfs::Result<()> {
         let type_ = self.disk_inode.read().type_;
         if type_ != FileType::File && type_ != FileType::SymLink {

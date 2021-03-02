@@ -27,6 +27,11 @@ pub trait INode: Any + Sync + Send {
         Err(FsError::NotSupported)
     }
 
+    /// Manipulate space of the INode
+    fn fallocate(&self, _mode: u32, _offset: u64, _len: u64) -> Result<()> {
+        Err(FsError::NotSupported)
+    }
+
     /// Sync all data and metadata
     fn sync_all(&self) -> Result<()> {
         Err(FsError::NotSupported)
@@ -339,6 +344,7 @@ pub enum FsError {
     NoIntegrity, // E_RDOFS
     PermError,   // E_PERM
     NameTooLong, // E_NAMETOOLONG
+    FileTooBig,  // E_FBIG
 }
 
 impl fmt::Display for FsError {
