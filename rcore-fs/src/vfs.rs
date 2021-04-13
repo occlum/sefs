@@ -89,6 +89,12 @@ pub trait INode: Any + Sync + Send {
         Err(FsError::NotSupported)
     }
 
+    /// Iterate the directory entries
+    /// Warn: This function cannot guarantee that iterating an entry only once.
+    fn iterate_entries(&self, _ctx: &mut DirentWriterContext) -> Result<usize> {
+        Err(FsError::NotSupported)
+    }
+
     /// Control device
     fn io_control(&self, _cmd: u32, _data: usize) -> Result<()> {
         Err(FsError::NotSupported)
@@ -376,6 +382,34 @@ pub trait FileSystem: Sync + Send {
 
     /// Get the file system information
     fn info(&self) -> FsInfo;
+}
+
+/// DirentWriterContext is a wrapper of DirentWriter with directory position
+/// After a successful write, the position increases correspondingly
+pub struct DirentWriterContext<'a> {
+    pos: usize,
+    writer: &'a mut dyn DirentWriter,
+}
+
+impl<'a> DirentWriterContext<'a> {
+    pub fn new(pos: usize, writer: &'a mut dyn DirentWriter) -> Self {
+        Self { pos, writer }
+    }
+
+    pub fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize> {
+        let written_len = self.writer.write_entry(name, ino, type_)?;
+        self.pos += 1;
+        Ok(written_len)
+    }
+
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+}
+
+/// DirentWriter is used to write directory entry, the object which implements it can decide how to format the data
+pub trait DirentWriter {
+    fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize>;
 }
 
 pub fn make_rdev(major: usize, minor: usize) -> usize {

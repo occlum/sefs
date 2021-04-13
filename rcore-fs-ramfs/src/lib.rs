@@ -361,6 +361,52 @@ impl INode for LockedINode {
         }
     }
 
+    fn iterate_entries(&self, mut ctx: &mut DirentWriterContext) -> Result<usize> {
+        let file = self.0.read();
+        if file.extra.type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        macro_rules! write_entry {
+            ($ctx:expr, $name:expr, $inode:expr, $total_written:expr) => {
+                let ctx = $ctx;
+                let name = $name;
+                let inode = $inode;
+                let total_written = $total_written;
+
+                let entry_file = inode.0.read();
+                match ctx.write_entry(name, entry_file.extra.inode as u64, entry_file.extra.type_) {
+                    Ok(written_len) => {
+                        *total_written += written_len;
+                    }
+                    Err(e) => {
+                        if *total_written == 0 {
+                            return Err(e);
+                        } else {
+                            return Ok(*total_written);
+                        }
+                    }
+                }
+            };
+        }
+        let mut total_written_len = 0;
+        let idx = ctx.pos();
+        // Write the two special entries
+        if idx == 0 {
+            let this_inode = file.this.upgrade().unwrap();
+            write_entry!(&mut ctx, ".", &this_inode, &mut total_written_len);
+        }
+        if idx <= 1 {
+            let parent_inode = file.parent.upgrade().unwrap();
+            write_entry!(&mut ctx, "..", &parent_inode, &mut total_written_len);
+        }
+        // Write the normal entries
+        let skipped_children = if idx < 2 { 0 } else { idx - 2 };
+        for (name, inode) in file.children.iter().skip(skipped_children) {
+            write_entry!(&mut ctx, name, inode, &mut total_written_len);
+        }
+        Ok(total_written_len)
+    }
+
     fn io_control(&self, _cmd: u32, _data: usize) -> Result<()> {
         Err(FsError::NotSupported)
     }
