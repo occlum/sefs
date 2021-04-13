@@ -54,6 +54,8 @@ pub struct DiskEntry {
     pub id: u32,
     /// file name
     pub name: Str256,
+    /// file type
+    pub type_: FileType,
 }
 
 #[repr(C)]
@@ -112,7 +114,7 @@ pub type BlockId = usize;
 pub type INodeId = BlockId;
 
 /// magic number for sfs
-pub const MAGIC: u32 = 0x2f8dbe2a;
+pub const MAGIC: u32 = 0x2f8d_be2a;
 /// size of block
 pub const BLKSIZE: usize = 1usize << BLKSIZE_LOG2;
 /// log2( size of block )
@@ -128,7 +130,7 @@ pub const BLKN_FREEMAP: BlockId = 1;
 /// number of bits in a block
 pub const BLKBITS: usize = BLKSIZE * 8;
 /// size of a dirent used in the size field
-pub const DIRENT_SIZE: usize = 260;
+pub const DIRENT_SIZE: usize = 264;
 
 pub const METAFILE_NAME: &str = "metadata";
 

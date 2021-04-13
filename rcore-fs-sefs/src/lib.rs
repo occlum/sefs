@@ -16,7 +16,7 @@ use core::mem::MaybeUninit;
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{self, FileSystem, FsError, INode, Timespec};
+use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Timespec};
 use spin::RwLock;
 
 use self::dev::*;
@@ -79,6 +79,7 @@ impl Debug for INodeImpl {
 
 impl INodeImpl {
     /// Only for Dir
+    //TODO: Fix the concurrent problem of dentry operations
     fn get_file_inode_and_entry_id(&self, name: &str) -> vfs::Result<(INodeId, usize)> {
         for entry_id in 0..self.disk_inode.read().blocks as usize {
             let entry = self.file.read_direntry(entry_id)?;
@@ -94,6 +95,16 @@ impl INodeImpl {
             .map(|(inode_id, _)| inode_id)
     }
 
+    fn get_entry_and_entry_id(&self, name: &str) -> vfs::Result<(DiskEntry, usize)> {
+        for entry_id in 0..self.disk_inode.read().blocks as usize {
+            let entry = self.file.read_direntry(entry_id)?;
+            if entry.name.as_ref() == name {
+                return Ok((entry, entry_id));
+            }
+        }
+        Err(FsError::EntryNotFound)
+    }
+
     /// Init dir content. Insert 2 init entries.
     /// This do not init nlinks, please modify the nlinks in the invoker.
     fn dirent_init(&self, parent: INodeId) -> vfs::Result<()> {
@@ -104,6 +115,7 @@ impl INodeImpl {
             &DiskEntry {
                 id: self.id as u32,
                 name: Str256::from("."),
+                type_: FileType::Dir,
             },
         )?;
         self.file.write_direntry(
@@ -111,6 +123,7 @@ impl INodeImpl {
             &DiskEntry {
                 id: parent as u32,
                 name: Str256::from(".."),
+                type_: FileType::Dir,
             },
         )?;
         Ok(())
@@ -249,7 +262,7 @@ impl vfs::INode for INodeImpl {
                 _ => panic!("Unknown file type"),
             },
             mode: disk_inode.mode,
-            type_: vfs::FileType::from(disk_inode.type_.clone()),
+            type_: vfs::FileType::from(disk_inode.type_),
             blocks: disk_inode.blocks as usize,
             atime: Timespec {
                 sec: disk_inode.atime as i64,
@@ -357,6 +370,7 @@ impl vfs::INode for INodeImpl {
         let entry = DiskEntry {
             id: inode.id as u32,
             name: Str256::from(name),
+            type_,
         };
         self.dirent_append(&entry)?;
         // Append success, increase nlinks
@@ -431,6 +445,7 @@ impl vfs::INode for INodeImpl {
         let entry = DiskEntry {
             id: child.id as u32,
             name: Str256::from(name),
+            type_: child.disk_inode.read().type_,
         };
         // Insert it into dir entry
         self.dirent_append(&entry)?;
@@ -502,33 +517,30 @@ impl vfs::INode for INodeImpl {
             None
         };
 
-        let (inode_id, entry_id) = self.get_file_inode_and_entry_id(old_name)?;
+        let (old_entry, entry_id) = self.get_entry_and_entry_id(old_name)?;
         if info.inode == dest_info.inode {
             // Move at same dirINode: just modify name
             let entry = DiskEntry {
-                id: inode_id as u32,
+                id: old_entry.id as u32,
                 name: Str256::from(new_name),
+                type_: old_entry.type_,
             };
             self.file.write_direntry(entry_id, &entry)?;
             // Replace the existing inode
             if let Some((replace_inode, replace_entry_id)) = to_be_replaced_inode_info {
                 if let Err(e) = self.dirent_inode_remove(replace_inode, replace_entry_id) {
                     // Recover if fail
-                    let entry = DiskEntry {
-                        id: inode_id as u32,
-                        name: Str256::from(old_name),
-                    };
-                    self.file.write_direntry(entry_id, &entry)?;
+                    self.file.write_direntry(entry_id, &old_entry)?;
                     return Err(e);
                 }
             }
             self.sync_all()?;
         } else {
             // Move between different dirINodes
-            let inode = self.fs.get_inode(inode_id)?;
             let entry = DiskEntry {
-                id: inode_id as u32,
+                id: old_entry.id as u32,
                 name: Str256::from(new_name),
+                type_: old_entry.type_,
             };
             let new_entry_id = dest.dirent_append(&entry)?;
             if let Err(e) = self.dirent_remove(entry_id) {
@@ -540,15 +552,12 @@ impl vfs::INode for INodeImpl {
             if let Some((replace_inode, replace_entry_id)) = to_be_replaced_inode_info {
                 if let Err(e) = dest.dirent_inode_remove(replace_inode, replace_entry_id) {
                     // Recover if fail
-                    let old_entry = DiskEntry {
-                        id: inode_id as u32,
-                        name: Str256::from(old_name),
-                    };
                     self.dirent_append(&old_entry)?;
                     dest.dirent_remove(new_entry_id)?;
                     return Err(e);
                 }
             }
+            let inode = self.fs.get_inode(old_entry.id as usize)?;
             if inode.disk_inode.read().type_ == FileType::Dir {
                 self.nlinks_dec();
                 dest.nlinks_inc();
@@ -580,6 +589,33 @@ impl vfs::INode for INodeImpl {
         };
         let entry = self.file.read_direntry(id)?;
         Ok(String::from(entry.name.as_ref()))
+    }
+
+    fn iterate_entries(&self, ctx: &mut DirentWriterContext) -> vfs::Result<usize> {
+        if self.disk_inode.read().type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        let idx = ctx.pos();
+        let mut total_written_len = 0;
+        for entry_id in idx..self.disk_inode.read().blocks as usize {
+            let entry = self.file.read_direntry(entry_id)?;
+            let written_len = match ctx.write_entry(
+                entry.name.as_ref(),
+                entry.id as u64,
+                vfs::FileType::from(entry.type_),
+            ) {
+                Ok(written_len) => written_len,
+                Err(e) => {
+                    if total_written_len == 0 {
+                        return Err(e);
+                    } else {
+                        break;
+                    }
+                }
+            };
+            total_written_len += written_len;
+        }
+        Ok(total_written_len)
     }
 
     fn io_control(&self, _cmd: u32, _data: usize) -> vfs::Result<()> {

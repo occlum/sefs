@@ -4,7 +4,6 @@
 #![feature(new_uninit)]
 
 extern crate alloc;
-
 //#[macro_use]
 extern crate log;
 
@@ -19,7 +18,7 @@ use core::any::Any;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use rcore_fs::dev::{DevError, EIO};
 use rcore_fs::vfs::*;
-use spin::RwLock;
+use spin::{RwLock, RwLockWriteGuard};
 
 #[cfg(test)]
 mod tests;
@@ -39,6 +38,8 @@ pub struct UnionFS {
     /// Allocate INode ID
     next_inode_id: AtomicUsize,
 }
+
+const ROOT_INODE_ID: usize = 2;
 
 /// INode for `UnionFS`
 pub struct UnionINode {
@@ -96,7 +97,7 @@ impl UnionFS {
             inners: fs,
             self_ref: Weak::default(),
             root_inode: None,
-            next_inode_id: AtomicUsize::new(2),
+            next_inode_id: AtomicUsize::new(ROOT_INODE_ID + 1),
         }
         .wrap())
     }
@@ -167,7 +168,7 @@ impl UnionFS {
             })
             .collect();
         let root_inode = Arc::new(UnionINode {
-            id: 1,
+            id: ROOT_INODE_ID,
             fs: fs.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners,
@@ -460,6 +461,37 @@ impl UnionINode {
         inner.entries().insert(String::from(".."), Some(parent));
         let this = inner.this.upgrade().unwrap();
         inner.entries().insert(String::from("."), Some(this));
+    }
+
+    fn new_inode(
+        &self,
+        inner: &RwLockWriteGuard<UnionINodeInner>,
+        name: &str,
+    ) -> Result<Arc<UnionINode>> {
+        let new_inode = {
+            let inodes: Vec<_> = inner.inners.iter().map(|x| x.find(name)).collect();
+            let mode = inodes
+                .iter()
+                .find_map(|v| v.as_real())
+                .unwrap()
+                .metadata()?
+                .mode;
+            let path_with_mode = inner.path_with_mode.with_next(name, mode);
+            let opaque = {
+                let mut opaque = inner.opaque;
+                if let Some(inode) = inner.maybe_container_inode() {
+                    if inode.find(&name.opaque()).is_ok() {
+                        opaque = true;
+                    }
+                }
+                opaque
+            };
+            self.fs.create_inode(inodes, path_with_mode, opaque)
+        };
+        if new_inode.metadata()?.type_ == FileType::Dir {
+            new_inode.init_entry(inner.this.upgrade().unwrap());
+        }
+        Ok(new_inode)
     }
 }
 
@@ -842,29 +874,7 @@ impl INode for UnionINode {
         if let Some(inode) = inode_option.unwrap() {
             return Ok(inode.clone());
         }
-        let new_inode = {
-            let inodes: Vec<_> = inner.inners.iter().map(|x| x.find(name)).collect();
-            let mode = inodes
-                .iter()
-                .find_map(|v| v.as_real())
-                .unwrap()
-                .metadata()?
-                .mode;
-            let path_with_mode = inner.path_with_mode.with_next(name, mode);
-            let opaque = {
-                let mut opaque = inner.opaque;
-                if let Some(inode) = inner.maybe_container_inode() {
-                    if inode.find(&name.opaque()).is_ok() {
-                        opaque = true;
-                    }
-                }
-                opaque
-            };
-            self.fs.create_inode(inodes, path_with_mode, opaque)
-        };
-        if new_inode.metadata()?.type_ == FileType::Dir {
-            new_inode.init_entry(inner.this.upgrade().unwrap());
-        }
+        let new_inode = self.new_inode(&inner, name)?;
         inner
             .entries()
             .insert(String::from(name), Some(new_inode.clone()));
@@ -882,6 +892,45 @@ impl INode for UnionINode {
         } else {
             Ok(entries.iter().nth(id).unwrap().0.clone())
         }
+    }
+
+    fn iterate_entries(&self, ctx: &mut DirentWriterContext) -> Result<usize> {
+        if self.metadata()?.type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        let idx = ctx.pos();
+        let mut total_written_len = 0;
+        let mut inner = self.inner.write();
+        let keys: Vec<_> = inner.entries().keys().skip(idx).cloned().collect();
+        for name in keys.iter() {
+            let inode_op = inner.entries().get(name).unwrap();
+            let inode = if inode_op.is_none() {
+                let new_inode = self.new_inode(&inner, name)?;
+                inner
+                    .entries()
+                    .insert(String::from(name), Some(new_inode.clone()));
+                new_inode
+            } else {
+                inode_op.as_ref().unwrap().clone()
+            };
+            let (ino, type_) = match name.as_ref() {
+                "." => (self.id, FileType::Dir),
+                ".." if self.id == ROOT_INODE_ID => (self.id, FileType::Dir),
+                _ => (inode.metadata()?.inode, inode.metadata()?.type_),
+            };
+            let written_len = match ctx.write_entry(name, ino as u64, type_) {
+                Ok(written_len) => written_len,
+                Err(e) => {
+                    if total_written_len == 0 {
+                        return Err(e);
+                    } else {
+                        break;
+                    }
+                }
+            };
+            total_written_len += written_len;
+        }
+        Ok(total_written_len)
     }
 
     fn io_control(&self, cmd: u32, data: usize) -> Result<()> {
