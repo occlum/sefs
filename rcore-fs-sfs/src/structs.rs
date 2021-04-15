@@ -122,7 +122,7 @@ impl<'a> From<&'a str> for Str32 {
 
 impl SuperBlock {
     pub fn check(&self) -> bool {
-        self.magic == MAGIC
+        self.magic == SFS_MAGIC
     }
 }
 
@@ -205,7 +205,7 @@ pub type INodeId = BlockId;
 pub const NODEVICE: usize = 100;
 
 /// magic number for sfs
-pub const MAGIC: u32 = 0x2f8dbe2b;
+pub const SFS_MAGIC: u32 = 0x2f8d_be2b;
 /// size of block
 pub const BLKSIZE: usize = 1usize << BLKSIZE_LOG2;
 /// log2( size of block )

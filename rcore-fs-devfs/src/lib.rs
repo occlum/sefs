@@ -26,6 +26,11 @@ pub struct DevFS {
     self_ref: Weak<DevFS>,
 }
 
+/// magic number for devfs
+pub const DEVFS_MAGIC: usize = 0x2f8d_be2d;
+const MAX_FNAME_LEN: usize = 255;
+const BLKSIZE: usize = 4096;
+
 impl FileSystem for DevFS {
     fn sync(&self) -> Result<()> {
         Ok(())
@@ -39,14 +44,15 @@ impl FileSystem for DevFS {
 
     fn info(&self) -> FsInfo {
         FsInfo {
-            bsize: 0,
-            frsize: 0,
+            magic: DEVFS_MAGIC,
+            bsize: BLKSIZE,
+            frsize: BLKSIZE,
             blocks: 0,
             bfree: 0,
             bavail: 0,
             files: 0,
             ffree: 0,
-            namemax: 0,
+            namemax: MAX_FNAME_LEN,
         }
     }
 }

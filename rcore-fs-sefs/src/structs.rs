@@ -12,7 +12,7 @@ use super::dev::{SefsMac, SefsUuid};
 #[repr(C)]
 #[derive(Debug)]
 pub struct SuperBlock {
-    /// magic number, should be SFS_MAGIC
+    /// magic number, should be SEFS_MAGIC
     pub magic: u32,
     /// number of blocks in fs
     pub blocks: u32,
@@ -84,7 +84,7 @@ impl<'a> From<&'a str> for Str256 {
 
 impl SuperBlock {
     pub fn check(&self) -> bool {
-        self.magic == MAGIC
+        self.magic == SEFS_MAGIC
     }
 }
 
@@ -113,8 +113,8 @@ impl AsBuf for u32 {}
 pub type BlockId = usize;
 pub type INodeId = BlockId;
 
-/// magic number for sfs
-pub const MAGIC: u32 = 0x2f8d_be2a;
+/// magic number for sefs
+pub const SEFS_MAGIC: u32 = 0x2f8d_be2a;
 /// size of block
 pub const BLKSIZE: usize = 1usize << BLKSIZE_LOG2;
 /// log2( size of block )
