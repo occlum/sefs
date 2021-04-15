@@ -11,6 +11,9 @@ use std::sync::{Mutex, MutexGuard};
 #[macro_use]
 extern crate log;
 
+/// magic number for hostfs
+pub const HOSTFS_MAGIC: usize = 0x2f8d_be30;
+
 /// File system at host
 pub struct HostFS {
     path: PathBuf,
@@ -41,6 +44,7 @@ impl FileSystem for HostFS {
     fn info(&self) -> FsInfo {
         // TODO:
         FsInfo {
+            magic: HOSTFS_MAGIC,
             bsize: 0,
             frsize: 0,
             blocks: 0,

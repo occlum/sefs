@@ -20,6 +20,7 @@ use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Times
 use spin::RwLock;
 
 use self::dev::*;
+pub use self::structs::SEFS_MAGIC;
 use self::structs::*;
 
 pub mod dev;
@@ -738,7 +739,7 @@ impl SEFS {
         let blocks = BLKBITS;
 
         let super_block = SuperBlock {
-            magic: MAGIC,
+            magic: SEFS_MAGIC,
             blocks: blocks as u32,
             unused_blocks: blocks as u32 - 2,
             groups: 1,
@@ -965,6 +966,7 @@ impl vfs::FileSystem for SEFS {
     fn info(&self) -> vfs::FsInfo {
         let sb = self.super_block.read();
         vfs::FsInfo {
+            magic: sb.magic as usize,
             bsize: BLKSIZE,
             frsize: BLKSIZE,
             blocks: sb.blocks as usize,

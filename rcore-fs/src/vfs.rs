@@ -304,8 +304,10 @@ pub type FsMac = [u8; FS_MAC_SIZE];
 /// Metadata of FileSystem
 ///
 /// Ref: [http://pubs.opengroup.org/onlinepubs/9699919799/]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FsInfo {
+    /// File system type
+    pub magic: usize,
     /// File system block size
     pub bsize: usize,
     /// Fundamental file system block size

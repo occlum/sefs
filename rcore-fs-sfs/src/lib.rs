@@ -768,7 +768,7 @@ impl SimpleFileSystem {
         assert!(blocks >= 16, "space too small");
 
         let super_block = SuperBlock {
-            magic: MAGIC,
+            magic: SFS_MAGIC,
             blocks: blocks as u32,
             unused_blocks: (blocks - BLKN_FREEMAP - freemap_blocks) as u32,
             info: Str32::from(DEFAULT_INFO),
@@ -958,6 +958,7 @@ impl vfs::FileSystem for SimpleFileSystem {
     fn info(&self) -> vfs::FsInfo {
         let sb = self.super_block.read();
         vfs::FsInfo {
+            magic: sb.magic as usize,
             bsize: BLKSIZE,
             frsize: BLKSIZE,
             blocks: sb.blocks as usize,

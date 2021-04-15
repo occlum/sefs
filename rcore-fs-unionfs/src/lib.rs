@@ -23,6 +23,9 @@ use spin::{RwLock, RwLockWriteGuard};
 #[cfg(test)]
 mod tests;
 
+/// magic number for unionfs
+pub const UNIONFS_MAGIC: usize = 0x2f8d_be2f;
+
 /// Union File System
 ///
 /// It allows files and directories of separate file systems, known as branches,
@@ -440,17 +443,22 @@ impl FileSystem for UnionFS {
     }
 
     fn info(&self) -> FsInfo {
-        // TODO: merge fs infos
-        FsInfo {
-            bsize: 0,
-            frsize: 0,
-            blocks: 0,
-            bfree: 0,
-            bavail: 0,
-            files: 0,
-            ffree: 0,
-            namemax: 0,
+        let mut merged_info: FsInfo = Default::default();
+        for (idx, fs) in self.inners.iter().enumerate() {
+            // the writable top layer
+            if idx == 0 {
+                merged_info.bsize = fs.info().bsize;
+                merged_info.frsize = fs.info().frsize;
+                merged_info.namemax = fs.info().namemax;
+                merged_info.bfree = fs.info().bfree;
+                merged_info.bavail = fs.info().bavail;
+                merged_info.ffree = fs.info().ffree;
+            }
+            merged_info.blocks = merged_info.blocks.saturating_add(fs.info().blocks);
+            merged_info.files = merged_info.files.saturating_add(fs.info().files);
         }
+        merged_info.magic = UNIONFS_MAGIC;
+        merged_info
     }
 }
 

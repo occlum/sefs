@@ -15,6 +15,11 @@ use core::sync::atomic::*;
 use rcore_fs::vfs::*;
 use spin::{RwLock, RwLockWriteGuard};
 
+/// magic number for ramfs
+pub const RAMFS_MAGIC: usize = 0x2f8d_be2c;
+const MAX_FNAME_LEN: usize = 255;
+const BLKSIZE: usize = 4096;
+
 pub struct RamFS {
     root: Arc<LockedINode>,
     next_inode_id: AtomicUsize,
@@ -31,14 +36,15 @@ impl FileSystem for RamFS {
 
     fn info(&self) -> FsInfo {
         FsInfo {
-            bsize: 0,
-            frsize: 0,
+            magic: RAMFS_MAGIC,
+            bsize: BLKSIZE,
+            frsize: BLKSIZE,
             blocks: 0,
             bfree: 0,
             bavail: 0,
             files: 0,
             ffree: 0,
-            namemax: 0,
+            namemax: MAX_FNAME_LEN,
         }
     }
 }
