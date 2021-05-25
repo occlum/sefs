@@ -217,14 +217,16 @@ impl vfs::INode for INodeImpl {
     }
 
     fn write_at(&self, offset: usize, buf: &[u8]) -> vfs::Result<usize> {
-        let DiskINode { type_, size, .. } = **self.disk_inode.read();
+        let type_ = self.disk_inode.read().type_;
         if type_ != FileType::File && type_ != FileType::SymLink {
             return Err(FsError::NotFile);
         }
         let len = self.file.write_at(buf, offset)?;
         let end_offset = offset + len;
-        if (size as usize) < end_offset {
-            self.resize(end_offset)?;
+        let mut inode = self.disk_inode.write();
+        if end_offset > inode.size as usize {
+            self.file.set_len(end_offset)?;
+            inode.size = end_offset as u64;
         }
         Ok(len)
     }
@@ -318,8 +320,9 @@ impl vfs::INode for INodeImpl {
         if type_ != FileType::File && type_ != FileType::SymLink {
             return Err(FsError::NotFile);
         }
+        let mut inode = self.disk_inode.write();
         self.file.set_len(len)?;
-        self.disk_inode.write().size = len as u64;
+        inode.size = len as u64;
         Ok(())
     }
 
