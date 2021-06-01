@@ -1,16 +1,16 @@
 [workspace]
 members = [
     "rcore-fs",
-    "rcore-fs-sfs",
     "rcore-fs-sefs",
     "rcore-fs-cli",
-    "rcore-fs-ext2",
     "rcore-fs-ramfs",
     "rcore-fs-mountfs",
     "rcore-fs-devfs",
     "rcore-fs-unionfs",
-    "rcore-fs-hostfs",
 ]
 exclude = [
     "sefs-cli",
+    "rcore-fs-sfs",
+    "rcore-fs-ext2",
+    "rcore-fs-hostfs",
 ]

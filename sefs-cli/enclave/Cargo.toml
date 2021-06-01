@@ -13,5 +13,3 @@ default = []
 
 [dependencies]
 log = "0.4"
-#sgx_types = "=1.1.0"
-#sgx_tstd = "=1.1.0"

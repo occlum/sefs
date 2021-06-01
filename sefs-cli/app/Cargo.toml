@@ -6,8 +6,8 @@ build = "build.rs"
 edition = "2018"
 
 [dependencies]
-sgx_types = "=1.1.0"
-sgx_urts = "=1.1.0"
+sgx_types = { path = "../../../rust-sgx-sdk/sgx_types" }
+sgx_urts = { path = "../../../rust-sgx-sdk/sgx_urts" }
 dirs = "1.0.2"
 fuse = "0.3"
 ctrlc = "3.1.6"
