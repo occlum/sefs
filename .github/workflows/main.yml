@@ -11,7 +11,7 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: nightly-2020-04-07
+        toolchain: nightly-2020-10-25
         override: true
         components: rustfmt, clippy
     - name: Check code format
@@ -40,7 +40,8 @@ jobs:
         args: --no-fail-fast  # Customize args for your own needs
       env:
         CARGO_INCREMENTAL: '0'
-        RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zno-landing-pads'
+        RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort'
+        RUSTDOCFLAGS: '-Cpanic=abort'
     - name: Cache grcov
       uses: actions/cache@v1
       with:

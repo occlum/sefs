@@ -276,7 +276,7 @@ impl UnionINodeInner {
                 }
                 if name.starts_with(WH_PREFIX) {
                     // whiteout
-                    entries.remove(&name[WH_PREFIX.len()..]);
+                    entries.remove(name.strip_prefix(WH_PREFIX).unwrap());
                 } else {
                     entries.insert(name, None);
                 }
