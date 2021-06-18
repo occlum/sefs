@@ -1,12 +1,14 @@
 use std::error::Error;
+use std::ffi::CString;
 use std::io::{Error as IoError, ErrorKind, Read};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process::exit;
 
 use ctrlc;
+use libc;
 use structopt::StructOpt;
-use sys_mount;
 
 use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
@@ -115,11 +117,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             ctrlc::set_handler(move || {
                 // Unmount the mount point will cause the "fuse::mount" return,
                 // which makes the program exit safely.
-                match sys_mount::unmount(&mnt_dir, sys_mount::UnmountFlags::empty()) {
-                    Ok(()) => (),
-                    Err(why) => {
-                        println!("failed to unmount {:?}: {}", &mnt_dir, why);
-                        exit(1);
+                let mnt_str = CString::new(mnt_dir.as_os_str().as_bytes().to_owned())
+                    .expect("invalid mount dir");
+                unsafe {
+                    match libc::umount(mnt_str.as_ptr()) {
+                        0 => (),
+                        _err => {
+                            let error: Result<(), IoError> = Err(IoError::last_os_error());
+                            println!("failed to unmount {:?}: {:?}", &mnt_dir, error);
+                            exit(1);
+                        }
                     }
                 }
             })?;

@@ -10,8 +10,8 @@ sgx_types = { path = "../../../rust-sgx-sdk/sgx_types" }
 sgx_urts = { path = "../../../rust-sgx-sdk/sgx_urts" }
 dirs = "1.0.2"
 fuse = "0.3"
+libc = "0.2"
 ctrlc = "3.1.6"
-sys-mount = "1.2.1"
 structopt = "0.3"
 env_logger = "0.7"
 rcore-fs-cli = { path = "../../rcore-fs-cli", features = ["use_fuse"] }
