@@ -1,10 +1,11 @@
 use crate::dev::DevError;
 use alloc::vec;
-use alloc::{string::String, sync::Arc, vec::Vec};
-use core::any::Any;
+use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
+use core::any::{Any, TypeId};
 use core::fmt;
 use core::result;
 use core::str;
+use spin::RwLock;
 
 /// Abstract file system object such as file or directory.
 pub trait INode: Any + Sync + Send {
@@ -210,6 +211,11 @@ pub trait INode: Any + Sync + Send {
         self.read_at(0, &mut buf.as_mut_slice()[..elf64_hdr_size])?;
         Ok(buf)
     }
+
+    /// Get the extension of this inode
+    fn ext(&self) -> Option<&Extension> {
+        None
+    }
 }
 
 impl dyn INode {
@@ -405,6 +411,79 @@ pub trait FileSystem: Sync + Send {
     /// Get the file system information
     fn info(&self) -> FsInfo;
 }
+
+/// An extension is a set of objects that is attached to
+/// an inode.
+///
+/// Each objects of an extension is of different types.
+/// In other words, types are used as the keys to get and
+/// set the objects in an extension.
+pub struct Extension {
+    data: RwLock<BTreeMap<TypeId, Arc<dyn AnyExt>>>,
+}
+
+impl Extension {
+    pub fn new() -> Self {
+        Self {
+            data: RwLock::new(BTreeMap::new()),
+        }
+    }
+
+    /// Get an object of `Arc<T>`.
+    pub fn get<T: AnyExt>(&self) -> Option<Arc<T>> {
+        self.data
+            .read()
+            .get(&TypeId::of::<T>())
+            .map(|any| unsafe { Arc::from_raw(Arc::into_raw(Arc::clone(any)) as *const T) })
+    }
+
+    /// Try to get an object of `Arc<T>`. If no object of the type exists,
+    /// put the default value for the type, then return it.
+    pub fn get_or_put_default<T: AnyExt + Default>(&self) -> Arc<T> {
+        let mut data = self.data.write();
+        if let Some(any) = data.get(&TypeId::of::<T>()) {
+            return unsafe { Arc::from_raw(Arc::into_raw(Arc::clone(any)) as *const T) };
+        }
+        let obj: Arc<T> = Arc::new(Default::default());
+        data.insert(TypeId::of::<T>(), obj.clone());
+        obj
+    }
+
+    /// Put an object of `Arc<T>`. If there exists one object of the type,
+    /// then the old one is returned.
+    pub fn put<T: AnyExt>(&self, obj: Arc<T>) -> Option<Arc<T>> {
+        self.data
+            .write()
+            .insert(TypeId::of::<T>(), obj)
+            .map(|any| unsafe { Arc::from_raw(Arc::into_raw(any) as *const T) })
+    }
+
+    /// Delete an object of `Arc<T>`. If there exists one object of the type,
+    /// then the old one is returned.
+    pub fn del<T: AnyExt>(&self) -> Option<Arc<T>> {
+        self.data
+            .write()
+            .remove(&TypeId::of::<T>())
+            .map(|any| unsafe { Arc::from_raw(Arc::into_raw(any) as *const T) })
+    }
+}
+
+impl Clone for Extension {
+    fn clone(&self) -> Self {
+        Self {
+            data: RwLock::new(self.data.read().clone()),
+        }
+    }
+}
+
+impl Default for Extension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The struct which implements the AnyExt trait can be used in Extension
+pub trait AnyExt: Any + Send + Sync {}
 
 /// DirentWriterContext is a wrapper of DirentWriter with directory position
 /// After a successful write, the position increases correspondingly
