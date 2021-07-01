@@ -299,6 +299,14 @@ impl INode for MNode {
         self.inode.iterate_entries(ctx)
     }
 
+    fn lock_list(&self) -> Result<Arc<dyn INodeLockList>> {
+        self.inode.lock_list()
+    }
+
+    fn test_lock_list(&self) -> Option<Arc<dyn INodeLockList>> {
+        self.inode.test_lock_list()
+    }
+
     fn io_control(&self, cmd: u32, data: usize) -> Result<()> {
         self.inode.io_control(cmd, data)
     }

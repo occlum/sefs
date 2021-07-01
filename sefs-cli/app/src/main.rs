@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let image_fs = {
                 let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)?
             };
             let mnt_dir = dir.clone();
             // Ctrl-C handler
@@ -136,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     let mode = sgx_dev::EncryptMode::from_parameters(false, &key)?;
                     let device = sgx_dev::SgxStorage::new(enclave.geteid(), &container, mode);
                     let container_fs =
-                        sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?;
+                        sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)?;
                     unionfs::UnionFS::new(vec![container_fs, image_fs])?
                 };
                 fuse::mount(VfsFuse::new(union_fs), &dir, &[])?;
@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let key = parse_key(&key)?;
                 let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)?
             };
             zip_dir(&dir, sefs_fs.root_inode())?;
             let root_mac_str = {
@@ -183,7 +183,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let key = parse_key(&key)?;
                 let mode = sgx_dev::EncryptMode::from_parameters(protect_integrity, &key)?;
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)?
             };
             std::fs::create_dir(&dir)?;
             unzip_dir(&dir, sefs_fs.root_inode())?;

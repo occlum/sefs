@@ -95,6 +95,16 @@ pub trait INode: Any + Sync + Send {
         Err(FsError::NotSupported)
     }
 
+    /// Get the lock list of the INode, create an empty one if not exist
+    fn lock_list(&self) -> Result<Arc<dyn INodeLockList>> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Test if INode has lock list
+    fn test_lock_list(&self) -> Option<Arc<dyn INodeLockList>> {
+        None
+    }
+
     /// Control device
     fn io_control(&self, _cmd: u32, _data: usize) -> Result<()> {
         Err(FsError::NotSupported)
@@ -404,6 +414,18 @@ pub trait FileSystem: Sync + Send {
 
     /// Get the file system information
     fn info(&self) -> FsInfo;
+}
+
+/// INodeLockListCreater is used to create INodeLockList for Filesystems
+pub trait INodeLockListCreater: Send + Sync {
+    fn new_empty_list(&self) -> Arc<dyn INodeLockList>;
+}
+
+/// INodeLockList is used to manage some inode locks.
+/// User can implement own specific type of INodeLockList and inode lock,
+/// then use `downcast_ref` to cast the INodeLockList to the specific type.
+pub trait INodeLockList: Any + Send + Sync {
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// DirentWriterContext is a wrapper of DirentWriter with directory position
