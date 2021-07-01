@@ -52,6 +52,8 @@ pub struct UnionINode {
     fs: Arc<UnionFS>,
     /// Inner
     inner: RwLock<UnionINodeInner>,
+    /// Extensions
+    ext: Extension,
 }
 
 /// The mutable part of `UnionINode`
@@ -180,6 +182,7 @@ impl UnionFS {
                 path_with_mode: PathWithMode::new(),
                 opaque: false,
             }),
+            ext: Extension::new(),
         });
         root_inode.inner.write().this = Arc::downgrade(&root_inode);
         root_inode.init_entry(root_inode.clone());
@@ -193,6 +196,7 @@ impl UnionFS {
         path_with_mode: PathWithMode,
         opaque: bool,
         id: Option<usize>,
+        ext: Option<Extension>,
     ) -> Arc<UnionINode> {
         let new_inode = Arc::new(UnionINode {
             id: id.unwrap_or_else(|| self.alloc_inode_id()),
@@ -204,6 +208,7 @@ impl UnionFS {
                 path_with_mode,
                 opaque,
             }),
+            ext: ext.unwrap_or_default(),
         });
         new_inode.inner.write().this = Arc::downgrade(&new_inode);
         new_inode
@@ -476,6 +481,7 @@ impl UnionINode {
         parent_guard: &RwLockWriteGuard<UnionINodeInner>,
         name: &str,
         id: Option<usize>,
+        ext: Option<Extension>,
     ) -> Arc<UnionINode> {
         let new_inode = {
             let inodes: Vec<_> = parent_guard.inners.iter().map(|x| x.find(name)).collect();
@@ -496,7 +502,7 @@ impl UnionINode {
                 }
                 opaque
             };
-            fs.create_inode(inodes, path_with_mode, opaque, id)
+            fs.create_inode(inodes, path_with_mode, opaque, id, ext)
         };
         if new_inode.metadata().unwrap().type_ == FileType::Dir {
             new_inode.init_entry(parent_guard.this.upgrade().unwrap());
@@ -596,7 +602,7 @@ impl INode for UnionINode {
                 }
             }
         }
-        let new_inode = Self::new_inode(&self.fs, &inner, name, None);
+        let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
         inner
             .entries()
             .insert(String::from(name), Some(new_inode.clone()));
@@ -788,7 +794,13 @@ impl INode for UnionINode {
                     },
                 }
             }
-            let new_inode = Self::new_inode(&self.fs, &self_inner, new_name, Some(old.id));
+            let new_inode = Self::new_inode(
+                &self.fs,
+                &self_inner,
+                new_name,
+                Some(old.id),
+                Some(old.ext.clone()),
+            );
             self_inner.entries().remove(old_name);
             self_inner
                 .entries()
@@ -851,7 +863,13 @@ impl INode for UnionINode {
                     },
                 }
             }
-            let new_inode = Self::new_inode(&self.fs, &target_inner, new_name, Some(old.id));
+            let new_inode = Self::new_inode(
+                &self.fs,
+                &target_inner,
+                new_name,
+                Some(old.id),
+                Some(old.ext.clone()),
+            );
             self_inner.entries().remove(old_name);
             target_inner
                 .entries()
@@ -872,7 +890,7 @@ impl INode for UnionINode {
         if let Some(inode) = inode_option.unwrap() {
             return Ok(inode.clone());
         }
-        let new_inode = Self::new_inode(&self.fs, &inner, name, None);
+        let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
         inner
             .entries()
             .insert(String::from(name), Some(new_inode.clone()));
@@ -903,7 +921,7 @@ impl INode for UnionINode {
         for name in keys.iter() {
             let inode_op = inner.entries().get(name).unwrap();
             let inode = if inode_op.is_none() {
-                let new_inode = Self::new_inode(&self.fs, &inner, name, None);
+                let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
                 inner
                     .entries()
                     .insert(String::from(name), Some(new_inode.clone()));
@@ -929,6 +947,10 @@ impl INode for UnionINode {
             total_written_len += written_len;
         }
         Ok(total_written_len)
+    }
+
+    fn ext(&self) -> Option<&Extension> {
+        Some(&self.ext)
     }
 
     fn io_control(&self, cmd: u32, data: usize) -> Result<()> {
