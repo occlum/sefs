@@ -941,6 +941,16 @@ impl INode for UnionINode {
         Ok(total_written_len)
     }
 
+    fn lock_list(&self) -> Result<Arc<dyn INodeLockList>> {
+        let mut inner = self.inner.write();
+        inner.container_inode()?.lock_list()
+    }
+
+    fn test_lock_list(&self) -> Option<Arc<dyn INodeLockList>> {
+        let inner = self.inner.read();
+        inner.inode().test_lock_list()
+    }
+
     fn io_control(&self, cmd: u32, data: usize) -> Result<()> {
         let inner = self.inner.read();
         inner.inode().io_control(cmd, data)

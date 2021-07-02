@@ -142,10 +142,10 @@ fn open_fs(fs: &str, image: &Path, create: bool) -> Arc<dyn FileSystem> {
             std::fs::create_dir_all(image).unwrap();
             let device = sefs::dev::StdStorage::new(image);
             if create {
-                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)
+                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)
                     .expect("failed to create sefs")
             } else {
-                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider, None)
                     .expect("failed to open sefs")
             }
         }

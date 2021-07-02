@@ -16,7 +16,10 @@ use core::mem::MaybeUninit;
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Timespec};
+use rcore_fs::vfs::{
+    self, DirentWriterContext, FileSystem, FsError, INode, INodeLockList, INodeLockListCreater,
+    Timespec,
+};
 use spin::RwLock;
 
 use self::dev::*;
@@ -66,6 +69,8 @@ pub struct INodeImpl {
     file: Box<dyn File>,
     /// Reference to FS
     fs: Arc<SEFS>,
+    /// lock list
+    lock_list: RwLock<Option<Arc<dyn INodeLockList>>>,
 }
 
 impl Debug for INodeImpl {
@@ -622,6 +627,21 @@ impl vfs::INode for INodeImpl {
         Ok(total_written_len)
     }
 
+    fn lock_list(&self) -> vfs::Result<Arc<dyn INodeLockList>> {
+        let mut lock_list = self.lock_list.write();
+        if lock_list.is_none() {
+            // Allocate the lock list on demond
+            let new_lock_list = self.fs.alloc_lock_list()?;
+            *lock_list = Some(new_lock_list);
+        }
+        Ok(lock_list.as_ref().unwrap().clone())
+    }
+
+    fn test_lock_list(&self) -> Option<Arc<dyn INodeLockList>> {
+        let lock_list = self.lock_list.read();
+        lock_list.as_ref().and_then(|l| Some(l.clone()))
+    }
+
     fn io_control(&self, _cmd: u32, _data: usize) -> vfs::Result<()> {
         Err(FsError::NotSupported)
     }
@@ -676,6 +696,8 @@ pub struct SEFS {
     time_provider: &'static dyn TimeProvider,
     /// uuid provider
     uuid_provider: &'static dyn UuidProvider,
+    /// used to create lock list for inode
+    lock_list_creater: Option<Box<dyn INodeLockListCreater>>,
     /// Pointer to self, used by INodes
     self_ptr: Weak<SEFS>,
 }
@@ -695,6 +717,7 @@ impl SEFS {
         device: Box<dyn Storage>,
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
+        lock_list_creater: Option<Box<dyn INodeLockListCreater>>,
     ) -> vfs::Result<Arc<Self>> {
         let meta_file = device.open(METAFILE_NAME)?;
 
@@ -725,6 +748,7 @@ impl SEFS {
             meta_file,
             time_provider,
             uuid_provider,
+            lock_list_creater,
             self_ptr: Weak::default(),
         }
         .wrap())
@@ -735,6 +759,7 @@ impl SEFS {
         device: Box<dyn Storage>,
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
+        lock_list_creater: Option<Box<dyn INodeLockListCreater>>,
     ) -> vfs::Result<Arc<Self>> {
         let blocks = BLKBITS;
 
@@ -765,6 +790,7 @@ impl SEFS {
             meta_file,
             time_provider,
             uuid_provider,
+            lock_list_creater,
             self_ptr: Weak::default(),
         }
         .wrap();
@@ -851,6 +877,15 @@ impl SEFS {
         self.super_block.write().unused_blocks += 1;
     }
 
+    /// Allocate an empty lock list for INode
+    fn alloc_lock_list(&self) -> vfs::Result<Arc<dyn INodeLockList>> {
+        let creater = self
+            .lock_list_creater
+            .as_ref()
+            .ok_or(FsError::NotSupported)?;
+        Ok(creater.new_empty_list())
+    }
+
     /// Create a new INode struct, then insert it to self.inodes
     /// Private used for load or create INode
     fn _new_inode(
@@ -869,6 +904,7 @@ impl SEFS {
                 false => self.device.open(filename.as_str())?,
             },
             fs: self.self_ptr.upgrade().unwrap(),
+            lock_list: RwLock::new(None),
         });
         #[cfg(not(feature = "create_image"))]
         match create {
