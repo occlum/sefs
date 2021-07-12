@@ -1,4 +1,5 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
+#![feature(new_uninit)]
 
 #[macro_use]
 extern crate alloc;
@@ -12,11 +13,14 @@ use alloc::{
 use core::any::Any;
 use core::fmt::{Debug, Error, Formatter};
 use core::mem::MaybeUninit;
+use core::ops::Range;
 
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Timespec};
+use rcore_fs::vfs::{
+    self, AllocFlags, DirentWriterContext, FallocateMode, FileSystem, FsError, INode, Timespec,
+};
 use spin::{RwLock, RwLockWriteGuard};
 
 use self::dev::*;
@@ -207,6 +211,130 @@ impl INodeImpl {
         self.fs.meta_file.flush()?;
         Ok(())
     }
+
+    /// Write zeros for the specified range of file.
+    fn zero_range(&self, range: &Range<usize>, keep_size: bool) -> vfs::Result<()> {
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        let (offset, len) = if keep_size {
+            let (start, end) = (range.start.min(file_size), range.end.min(file_size));
+            (start, end - start)
+        } else {
+            (range.start, range.len())
+        };
+        self.file.write_zeros_at(offset, len).unwrap();
+
+        // May update file size
+        if !keep_size && range.end > file_size {
+            self.file.set_len(range.end).unwrap();
+            inode.size = range.end as u64;
+        }
+        Ok(())
+    }
+
+    /// Insert zeros for the specified range of file.
+    ///
+    /// The contents of the file starting at the start of range will be shifted
+    /// upward, making the file range.len() bytes bigger.
+    fn insert_range(&self, range: &Range<usize>) -> vfs::Result<()> {
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        if range.start >= file_size {
+            return Err(FsError::InvalidParam);
+        }
+        if range.start % BLKSIZE != 0 || range.len() % BLKSIZE != 0 {
+            return Err(FsError::InvalidParam);
+        }
+        let new_file_size = file_size
+            .checked_add(range.len())
+            .ok_or(FsError::FileTooBig)?;
+        if (new_file_size as isize).is_negative() {
+            return Err(FsError::FileTooBig);
+        }
+
+        // Move the contents of file forward
+        let src_range = Range {
+            start: range.start,
+            end: file_size,
+        };
+        let dst_offset = range.end;
+        self.copy_range_to(&src_range, dst_offset)?;
+
+        // Insert zeros
+        self.file.write_zeros_at(range.start, range.len()).unwrap();
+
+        // Update file size
+        self.file.set_len(new_file_size).unwrap();
+        inode.size = new_file_size as u64;
+        Ok(())
+    }
+
+    /// Remove the range of file.
+    ///
+    /// The contents of the file starting at the end of range will be appended
+    /// at the start of the range, making the file range.len() bytes smaller.
+    fn collapse_range(&self, range: &Range<usize>) -> vfs::Result<()> {
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        if range.end >= file_size {
+            return Err(FsError::InvalidParam);
+        }
+        if range.start % BLKSIZE != 0 || range.len() % BLKSIZE != 0 {
+            return Err(FsError::InvalidParam);
+        }
+
+        // Move the contents of file backward
+        let src_range = Range {
+            start: range.end,
+            end: file_size,
+        };
+        let dst_offset = range.start;
+        self.copy_range_to(&src_range, dst_offset)?;
+
+        // Update file size
+        let new_file_size = file_size - range.len();
+        self.file.set_len(new_file_size).unwrap();
+        inode.size = new_file_size as u64;
+        Ok(())
+    }
+
+    /// Copy a range of data to a specified offset of file.
+    ///
+    /// The source range and the destination range may overlap.
+    fn copy_range_to(&self, src_range: &Range<usize>, dst_offset: usize) -> vfs::Result<()> {
+        let (mut src_offset, mut dst_offset, offset_step) = if src_range.start < dst_offset {
+            let len = src_range.len().min(BLKSIZE);
+            let src_offset = (src_range.end - len) as isize;
+            let dst_offset = (dst_offset + src_range.len() - len) as isize;
+            let offset_step = -(BLKSIZE as isize);
+            (src_offset, dst_offset, offset_step)
+        } else if src_range.start > dst_offset {
+            let src_offset = src_range.start as isize;
+            let dst_offset = dst_offset as isize;
+            let offset_step = BLKSIZE as isize;
+            (src_offset, dst_offset, offset_step)
+        } else {
+            // src_range.start == dst_offset, do nothing
+            return Ok(());
+        };
+
+        // Do the range copying
+        let mut remaining_size = src_range.len();
+        let mut buf: [u8; BLKSIZE] = unsafe { MaybeUninit::uninit().assume_init() };
+        while remaining_size > 0 {
+            let len = remaining_size.min(BLKSIZE);
+            self.file
+                .read_exact_at(&mut buf[..len], src_offset as usize)
+                .unwrap();
+            self.file
+                .write_all_at(&buf[..len], dst_offset as usize)
+                .unwrap();
+            remaining_size -= len;
+            src_offset += offset_step;
+            dst_offset += offset_step;
+        }
+        Ok(())
+    }
 }
 
 impl vfs::INode for INodeImpl {
@@ -282,7 +410,7 @@ impl vfs::INode for INodeImpl {
             nlinks: disk_inode.nlinks as usize,
             uid: disk_inode.uid as usize,
             gid: disk_inode.gid as usize,
-            blk_size: 0x1000,
+            blk_size: BLKSIZE,
             rdev: 0,
         })
     }
@@ -312,19 +440,56 @@ impl vfs::INode for INodeImpl {
         Ok(())
     }
 
-    fn fallocate(&self, mode: u32, offset: u64, len: u64) -> vfs::Result<()> {
+    fn fallocate(&self, mode: &FallocateMode, offset: usize, len: usize) -> vfs::Result<()> {
         if self.disk_inode.read().type_ != FileType::File {
             return Err(FsError::NotFile);
         }
-        // TODO: Support more modes of fallocate
-        if mode != 0 {
-            return Err(FsError::NotSupported);
-        }
-        let new_size = offset.checked_add(len).ok_or_else(|| FsError::FileTooBig)?;
-        let mut inode = self.disk_inode.write();
-        if new_size > inode.size {
-            self.file.set_len(new_size as usize)?;
-            inode.size = new_size;
+
+        let range = {
+            if (offset as isize).is_negative() {
+                return Err(FsError::FileTooBig);
+            }
+            let end_offset = offset.checked_add(len).ok_or(FsError::FileTooBig)?;
+            if (end_offset as isize).is_negative() {
+                return Err(FsError::FileTooBig);
+            }
+            Range::<usize> {
+                start: offset,
+                end: end_offset,
+            }
+        };
+
+        // Handle file space with mode
+        //
+        // TODO: The Performance issue:
+        // The current implementation does not allocate or reserve disk space;
+        // it actually writes zeros. This means the performance of fallocate
+        // could be terrible in some extreme cases. The collapsing or inserting
+        // operation suffers from a similar performance problem as they may copy
+        // a huge amount of data.
+        //
+        // TODO: The robustness issue:
+        // The current implementation will panic instead of reporting the
+        // not-enough-space error if the underlying disk does not have enough space.
+        // Also, for the sub-command of FallocateMode::Allocate with keep_size = true,
+        // the success of fallocate does not really mean future writes that fall
+        // inside the allocated range are guaranteed to succeed.
+        match mode {
+            FallocateMode::PunchHoleKeepSize => self.zero_range(&range, true)?,
+            FallocateMode::ZeroRange => self.zero_range(&range, false)?,
+            FallocateMode::ZeroRangeKeepSize => self.zero_range(&range, true)?,
+            FallocateMode::CollapseRange => self.collapse_range(&range)?,
+            FallocateMode::InsertRange => self.insert_range(&range)?,
+            FallocateMode::Allocate(flags) => {
+                if !flags.contains(AllocFlags::KEEP_SIZE) {
+                    let mut inode = self.disk_inode.write();
+                    let file_size = inode.size as usize;
+                    if range.end > file_size {
+                        self.file.set_len(range.end).unwrap();
+                        inode.size = range.end as u64;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -350,7 +515,7 @@ impl vfs::INode for INodeImpl {
             vfs::FileType::File => FileType::File,
             vfs::FileType::Dir => FileType::Dir,
             vfs::FileType::SymLink => FileType::SymLink,
-            _ => return Err(vfs::FsError::InvalidParam),
+            _ => return Err(FsError::InvalidParam),
         };
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {

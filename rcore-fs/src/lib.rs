@@ -1,5 +1,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
+#[macro_use]
+extern crate bitflags;
 extern crate alloc;
 
 pub mod dev;

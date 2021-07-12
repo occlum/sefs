@@ -28,7 +28,7 @@ pub trait INode: Any + Sync + Send {
     }
 
     /// Manipulate space of the INode
-    fn fallocate(&self, _mode: u32, _offset: u64, _len: u64) -> Result<()> {
+    fn fallocate(&self, _mode: &FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         Err(FsError::NotSupported)
     }
 
@@ -326,6 +326,25 @@ pub struct FsInfo {
     pub namemax: usize,
 }
 
+/// Operation mode for fallocate
+#[derive(Debug)]
+pub enum FallocateMode {
+    Allocate(AllocFlags),
+    PunchHoleKeepSize,
+    ZeroRange,
+    ZeroRangeKeepSize,
+    CollapseRange,
+    InsertRange,
+}
+
+bitflags! {
+    /// Flags for the allocate mode
+    pub struct AllocFlags: u32 {
+        const KEEP_SIZE = 0x01;
+        const UNSHARE_RANGE = 0x40;
+    }
+}
+
 // Note: IOError/NoMemory always lead to a panic since it's hard to recover from it.
 //       We also panic when we can not parse the fs on disk normally
 #[derive(Debug, Eq, PartialEq)]
@@ -345,14 +364,15 @@ pub enum FsError {
     DeviceError(i32), // Device error contains the inner error number to report the error of device
     IOCTLError,
     NoDevice,
-    Again,       // E_AGAIN, when no data is available, never happens in fs
-    SymLoop,     // E_LOOP
-    Busy,        // E_BUSY
-    WrProtected, // E_RDOFS
-    NoIntegrity, // E_RDOFS
-    PermError,   // E_PERM
-    NameTooLong, // E_NAMETOOLONG
-    FileTooBig,  // E_FBIG
+    Again,          // E_AGAIN, when no data is available, never happens in fs
+    SymLoop,        // E_LOOP
+    Busy,           // E_BUSY
+    WrProtected,    // E_RDOFS
+    NoIntegrity,    // E_RDOFS
+    PermError,      // E_PERM
+    NameTooLong,    // E_NAMETOOLONG
+    FileTooBig,     // E_FBIG
+    OpNotSupported, // E_OPNOTSUPP
 }
 
 impl fmt::Display for FsError {

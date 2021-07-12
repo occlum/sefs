@@ -264,7 +264,7 @@ fn move_image() -> Result<()> {
     Ok(())
 }
 
-const MODE: u32 = 0o777;
+const MODE: u16 = 0o777;
 
 trait IsNotFound {
     fn is_not_found(&self) -> bool;

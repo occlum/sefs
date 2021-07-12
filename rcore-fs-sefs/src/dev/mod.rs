@@ -33,6 +33,19 @@ pub trait File: Send + Sync {
             Err(DevError(EIO))
         }
     }
+
+    fn write_zeros_at(&self, offset: usize, len: usize) -> DevResult<()> {
+        static ZEROS: [u8; crate::BLKSIZE] = [0; crate::BLKSIZE];
+        let mut remaining_len = len;
+        let mut offset = offset;
+        while remaining_len != 0 {
+            let len_per_loop = remaining_len.min(crate::BLKSIZE);
+            self.write_all_at(&ZEROS[..len_per_loop], offset)?;
+            remaining_len -= len_per_loop;
+            offset += len_per_loop;
+        }
+        Ok(())
+    }
 }
 
 /// The collection of all files in the FS.
