@@ -28,7 +28,7 @@ pub trait INode: Any + Sync + Send {
     }
 
     /// Manipulate space of the INode
-    fn fallocate(&self, _mode: u32, _offset: u64, _len: u64) -> Result<()> {
+    fn fallocate(&self, _mode: FallocateMode, _offset: usize, _len: usize) -> Result<()> {
         Err(FsError::NotSupported)
     }
 
@@ -326,6 +326,50 @@ pub struct FsInfo {
     pub namemax: usize,
 }
 
+bitflags! {
+    /// Operation mode for fallocate
+    /// Please checkout linux/include/uapi/linux/falloc.h for the details
+    pub struct FallocateMode: u32 {
+        /// File size will not be changed when extend the file
+        const FALLOC_FL_KEEP_SIZE = 0x01;
+        /// De-allocates range
+        const FALLOC_FL_PUNCH_HOLE = 0x02;
+        /// Remove a range of a file without leaving a hole in the file
+        const FALLOC_FL_COLLAPSE_RANGE = 0x08;
+        /// Convert a range of file to zeros
+        const FALLOC_FL_ZERO_RANGE = 0x10;
+        /// Insert space within the file size without overwriting any existing data
+        const FALLOC_FL_INSERT_RANGE = 0x20;
+    }
+}
+
+impl FallocateMode {
+    pub fn from_u32(raw_mode: u32) -> Result<Self> {
+        let mode = Self::from_bits(raw_mode).ok_or(FsError::OpNotSupported)?;
+        // Punch hole and zero range are mutually exclusive
+        if mode.contains(Self::FALLOC_FL_PUNCH_HOLE) && mode.contains(Self::FALLOC_FL_ZERO_RANGE) {
+            return Err(FsError::OpNotSupported);
+        }
+        // Punch hole must have keep size set
+        if mode.contains(Self::FALLOC_FL_PUNCH_HOLE) && !mode.contains(Self::FALLOC_FL_KEEP_SIZE) {
+            return Err(FsError::OpNotSupported);
+        }
+        // Collapse range should only be used exclusively
+        if mode.contains(Self::FALLOC_FL_COLLAPSE_RANGE)
+            && !(mode & !Self::FALLOC_FL_COLLAPSE_RANGE).is_empty()
+        {
+            return Err(FsError::InvalidParam);
+        }
+        // Insert range should only be used exclusively
+        if mode.contains(Self::FALLOC_FL_INSERT_RANGE)
+            && !(mode & !Self::FALLOC_FL_INSERT_RANGE).is_empty()
+        {
+            return Err(FsError::InvalidParam);
+        }
+        Ok(mode)
+    }
+}
+
 // Note: IOError/NoMemory always lead to a panic since it's hard to recover from it.
 //       We also panic when we can not parse the fs on disk normally
 #[derive(Debug, Eq, PartialEq)]
@@ -345,14 +389,15 @@ pub enum FsError {
     DeviceError(i32), // Device error contains the inner error number to report the error of device
     IOCTLError,
     NoDevice,
-    Again,       // E_AGAIN, when no data is available, never happens in fs
-    SymLoop,     // E_LOOP
-    Busy,        // E_BUSY
-    WrProtected, // E_RDOFS
-    NoIntegrity, // E_RDOFS
-    PermError,   // E_PERM
-    NameTooLong, // E_NAMETOOLONG
-    FileTooBig,  // E_FBIG
+    Again,          // E_AGAIN, when no data is available, never happens in fs
+    SymLoop,        // E_LOOP
+    Busy,           // E_BUSY
+    WrProtected,    // E_RDOFS
+    NoIntegrity,    // E_RDOFS
+    PermError,      // E_PERM
+    NameTooLong,    // E_NAMETOOLONG
+    FileTooBig,     // E_FBIG
+    OpNotSupported, // E_OPNOTSUPP
 }
 
 impl fmt::Display for FsError {

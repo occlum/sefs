@@ -549,7 +549,7 @@ impl INode for UnionINode {
         }
     }
 
-    fn fallocate(&self, mode: u32, offset: u64, len: u64) -> Result<()> {
+    fn fallocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
         let mut inner = self.inner.write();
         inner.container_inode()?.fallocate(mode, offset, len)
     }

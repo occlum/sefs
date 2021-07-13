@@ -250,7 +250,7 @@ impl INode for MNode {
         self.inode.sync_data()
     }
 
-    fn fallocate(&self, mode: u32, offset: u64, len: u64) -> Result<()> {
+    fn fallocate(&self, mode: FallocateMode, offset: usize, len: usize) -> Result<()> {
         self.inode.fallocate(mode, offset, len)
     }
 

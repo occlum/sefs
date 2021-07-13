@@ -1,4 +1,5 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
+#![feature(new_uninit)]
 
 #[macro_use]
 extern crate alloc;
@@ -16,7 +17,9 @@ use core::mem::MaybeUninit;
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Timespec};
+use rcore_fs::vfs::{
+    self, DirentWriterContext, FallocateMode, FileSystem, FsError, INode, Timespec,
+};
 use spin::RwLock;
 
 use self::dev::*;
@@ -207,6 +210,131 @@ impl INodeImpl {
         self.fs.meta_file.flush()?;
         Ok(())
     }
+
+    fn zero_range(
+        &self,
+        start_offset: usize,
+        end_offset: usize,
+        keep_size: bool,
+    ) -> vfs::Result<()> {
+        assert!(start_offset < end_offset);
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        let (mut offset, mut len) = {
+            let (start, end) = if keep_size {
+                (start_offset.min(file_size), end_offset.min(file_size))
+            } else {
+                (start_offset, end_offset)
+            };
+            (start, end - start)
+        };
+        static ZEROS: [u8; BLKSIZE] = [0; BLKSIZE];
+        while len != 0 {
+            let len_per_loop = len.min(BLKSIZE);
+            let len_written = self
+                .file
+                .write_at(&ZEROS[..len_per_loop], offset)
+                .expect("failed to write zeros");
+            len -= len_written;
+            offset += len_written;
+        }
+        if !keep_size && end_offset > file_size {
+            self.file.set_len(end_offset)?;
+            inode.size = end_offset as u64;
+        }
+        Ok(())
+    }
+
+    fn insert_range(&self, start_offset: usize, end_offset: usize) -> vfs::Result<()> {
+        assert!(start_offset < end_offset);
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        if start_offset >= file_size {
+            return Err(FsError::InvalidParam);
+        }
+        let insert_range_len = end_offset - start_offset;
+        if start_offset % BLKSIZE != 0 || insert_range_len % BLKSIZE != 0 {
+            return Err(FsError::InvalidParam);
+        }
+        let new_file_size = file_size
+            .checked_add(insert_range_len)
+            .ok_or(FsError::FileTooBig)?;
+        // Shift upward the contents of file starting at start_offset
+        let mut buf = unsafe { Box::<[u8; BLKSIZE]>::new_uninit().assume_init() };
+        let mut len = file_size - start_offset;
+        let mut offset = file_size;
+        while len != 0 {
+            let len_per_loop = len.min(BLKSIZE);
+            offset -= len_per_loop;
+            let len_read = self
+                .file
+                .read_at(&mut buf[..len_per_loop], offset)
+                .expect("failed to read");
+            assert!(len_read == len_per_loop);
+            let len_written = self
+                .file
+                .write_at(&buf[..len_per_loop], offset + insert_range_len)
+                .expect("failed to write");
+            assert!(len_written == len_per_loop);
+            len -= len_per_loop;
+        }
+        // Insert zeros
+        len = insert_range_len;
+        offset = start_offset;
+        static ZEROS: [u8; BLKSIZE] = [0; BLKSIZE];
+        while len != 0 {
+            let len_per_loop = len.min(BLKSIZE);
+            let len_written = self
+                .file
+                .write_at(&ZEROS[..len_per_loop], offset)
+                .expect("failed to write zeros");
+            len -= len_written;
+            offset += len_written;
+        }
+        // Update file size
+        self.file.set_len(new_file_size)?;
+        inode.size = new_file_size as u64;
+        Ok(())
+    }
+
+    fn collapse_range(&self, start_offset: usize, end_offset: usize) -> vfs::Result<()> {
+        assert!(start_offset < end_offset);
+        let mut inode = self.disk_inode.write();
+        let file_size = inode.size as usize;
+        if end_offset >= file_size {
+            return Err(FsError::InvalidParam);
+        }
+        let collapse_range_len = end_offset - start_offset;
+        if start_offset % BLKSIZE != 0 || collapse_range_len % BLKSIZE != 0 {
+            return Err(FsError::InvalidParam);
+        }
+        // Move the contents of file starting at end_offset to start_offset
+        let mut buf = unsafe { Box::<[u8; BLKSIZE]>::new_uninit().assume_init() };
+        let mut len = file_size - end_offset;
+        let mut read_offset = end_offset;
+        let mut write_offset = start_offset;
+        while len != 0 {
+            let len_per_loop = len.min(BLKSIZE);
+            let len_read = self
+                .file
+                .read_at(&mut buf[..len_per_loop], read_offset)
+                .expect("failed to read");
+            assert!(len_read == len_per_loop);
+            let len_written = self
+                .file
+                .write_at(&buf[..len_per_loop], write_offset)
+                .expect("failed to write");
+            assert!(len_written == len_per_loop);
+            len -= len_per_loop;
+            read_offset += len_per_loop;
+            write_offset += len_per_loop;
+        }
+        // Update file size
+        let new_file_size = file_size - collapse_range_len;
+        self.file.set_len(new_file_size)?;
+        inode.size = new_file_size as u64;
+        Ok(())
+    }
 }
 
 impl vfs::INode for INodeImpl {
@@ -282,7 +410,7 @@ impl vfs::INode for INodeImpl {
             nlinks: disk_inode.nlinks as usize,
             uid: disk_inode.uid as usize,
             gid: disk_inode.gid as usize,
-            blk_size: 0x1000,
+            blk_size: BLKSIZE,
             rdev: 0,
         })
     }
@@ -312,19 +440,32 @@ impl vfs::INode for INodeImpl {
         Ok(())
     }
 
-    fn fallocate(&self, mode: u32, offset: u64, len: u64) -> vfs::Result<()> {
+    fn fallocate(&self, mode: FallocateMode, offset: usize, len: usize) -> vfs::Result<()> {
         if self.disk_inode.read().type_ != FileType::File {
             return Err(FsError::NotFile);
         }
-        // TODO: Support more modes of fallocate
-        if mode != 0 {
-            return Err(FsError::NotSupported);
-        }
-        let new_size = offset.checked_add(len).ok_or_else(|| FsError::FileTooBig)?;
-        let mut inode = self.disk_inode.write();
-        if new_size > inode.size {
-            self.file.set_len(new_size as usize)?;
-            inode.size = new_size;
+        let end_offset = offset.checked_add(len).ok_or(FsError::FileTooBig)?;
+        // Handle file space with mode
+        if mode.contains(FallocateMode::FALLOC_FL_PUNCH_HOLE) {
+            // Use zero_range to implement punch hole, punch hole must have keep size set
+            self.zero_range(offset, end_offset, true)?;
+        } else if mode.contains(FallocateMode::FALLOC_FL_ZERO_RANGE) {
+            self.zero_range(
+                offset,
+                end_offset,
+                mode.contains(FallocateMode::FALLOC_FL_KEEP_SIZE),
+            )?;
+        } else if mode.contains(FallocateMode::FALLOC_FL_INSERT_RANGE) {
+            self.insert_range(offset, end_offset)?;
+        } else if mode.contains(FallocateMode::FALLOC_FL_COLLAPSE_RANGE) {
+            self.collapse_range(offset, end_offset)?;
+        } else if !mode.contains(FallocateMode::FALLOC_FL_KEEP_SIZE) {
+            let mut inode = self.disk_inode.write();
+            let file_size = inode.size as usize;
+            if end_offset > file_size {
+                self.file.set_len(end_offset)?;
+                inode.size = end_offset as u64;
+            }
         }
         Ok(())
     }
@@ -350,7 +491,7 @@ impl vfs::INode for INodeImpl {
             vfs::FileType::File => FileType::File,
             vfs::FileType::Dir => FileType::Dir,
             vfs::FileType::SymLink => FileType::SymLink,
-            _ => return Err(vfs::FsError::InvalidParam),
+            _ => return Err(FsError::InvalidParam),
         };
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
