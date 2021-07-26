@@ -237,6 +237,13 @@ impl Filesystem for VfsFuse {
         reply.entry(&TTL, &attr, 0);
     }
 
+    fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
+        let inode = try_vfs!(reply, self.get_inode(ino));
+        let mut content = [0u8; vfs::PATH_MAX];
+        let len = try_vfs!(reply, inode.read_at(0, &mut content));
+        reply.data(&content[0..len]);
+    }
+
     fn read(
         &mut self,
         _req: &Request,
