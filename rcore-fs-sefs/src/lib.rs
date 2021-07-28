@@ -17,7 +17,7 @@ use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
 use rcore_fs::vfs::{self, DirentWriterContext, FileSystem, FsError, INode, Timespec};
-use spin::RwLock;
+use spin::{RwLock, RwLockWriteGuard};
 
 use self::dev::*;
 pub use self::structs::SEFS_MAGIC;
@@ -661,6 +661,9 @@ impl Drop for INodeImpl {
 }
 
 /// Simple Encrypted File System
+// Be careful with the write lock sequence of super_block, free_map and inodes
+// Since free_map and super_block are always used simultaneously,
+// use the `write_lock_free_map_and_super_block` to acquire the locks.
 pub struct SEFS {
     /// on-disk superblock
     super_block: RwLock<Dirty<SuperBlock>>,
@@ -797,15 +800,14 @@ impl SEFS {
 
     /// Write back super block and free map if dirty
     fn sync_metadata(&self) -> vfs::Result<()> {
+        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
         // Sync super block
-        let mut super_block = self.super_block.write();
         if super_block.dirty() {
             self.meta_file
                 .write_all_at(super_block.as_buf(), BLKSIZE * BLKN_SUPER)?;
             super_block.sync();
         }
         // Sync free map
-        let mut free_map = self.free_map.write();
         if free_map.dirty() {
             for i in 0..super_block.groups as usize {
                 let slice = &free_map.as_slice()[BLKSIZE * i..BLKSIZE * (i + 1)];
@@ -821,8 +823,7 @@ impl SEFS {
 
     /// Allocate a block, return block id
     fn alloc_block(&self) -> Option<usize> {
-        let mut free_map = self.free_map.write();
-        let mut super_block = self.super_block.write();
+        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
         let id = free_map.alloc().or_else(|| {
             // Allocate a new group
             let new_group_id = super_block.groups as usize;
@@ -845,10 +846,23 @@ impl SEFS {
 
     /// Release a block
     fn free_block(&self, block_id: usize) {
-        let mut free_map = self.free_map.write();
+        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
         assert!(!free_map[block_id]);
         free_map.set(block_id, true);
-        self.super_block.write().unused_blocks += 1;
+        super_block.unused_blocks += 1;
+    }
+
+    /// Helper function to get the write lock on both free_map and super_block
+    /// The lock sequence can avoid deadlock
+    fn write_lock_free_map_and_super_block(
+        &self,
+    ) -> (
+        RwLockWriteGuard<Dirty<BitVec<Lsb0, u8>>>,
+        RwLockWriteGuard<Dirty<SuperBlock>>,
+    ) {
+        let free_map = self.free_map.write();
+        let super_block = self.super_block.write();
+        (free_map, super_block)
     }
 
     /// Create a new INode struct, then insert it to self.inodes
@@ -943,8 +957,6 @@ impl SEFS {
 impl vfs::FileSystem for SEFS {
     /// Write back FS if dirty
     fn sync(&self) -> vfs::Result<()> {
-        // Sync metadata
-        self.sync_metadata()?;
         // Sync all INodes
         self.flush_weak_inodes();
         for inode in self.inodes.read().values() {
@@ -952,6 +964,8 @@ impl vfs::FileSystem for SEFS {
                 inode.sync_all()?;
             }
         }
+        // Sync metadata
+        self.sync_metadata()?;
         Ok(())
     }
 
