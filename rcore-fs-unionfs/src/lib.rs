@@ -192,9 +192,10 @@ impl UnionFS {
         inodes: Vec<VirtualINode>,
         path_with_mode: PathWithMode,
         opaque: bool,
+        id: Option<usize>,
     ) -> Arc<UnionINode> {
         let new_inode = Arc::new(UnionINode {
-            id: self.alloc_inode_id(),
+            id: id.unwrap_or_else(|| self.alloc_inode_id()),
             fs: self.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners: inodes,
@@ -471,35 +472,39 @@ impl UnionINode {
         inner.entries().insert(String::from("."), Some(this));
     }
 
+    /// Helper function to create an UnionINode, if `id` is provided, use it as
+    /// the inode id of new inode, or just allocate a new one.
     fn new_inode(
-        &self,
-        inner: &RwLockWriteGuard<UnionINodeInner>,
+        fs: &Arc<UnionFS>,
+        parent_guard: &RwLockWriteGuard<UnionINodeInner>,
         name: &str,
-    ) -> Result<Arc<UnionINode>> {
+        id: Option<usize>,
+    ) -> Arc<UnionINode> {
         let new_inode = {
-            let inodes: Vec<_> = inner.inners.iter().map(|x| x.find(name)).collect();
+            let inodes: Vec<_> = parent_guard.inners.iter().map(|x| x.find(name)).collect();
             let mode = inodes
                 .iter()
                 .find_map(|v| v.as_real())
                 .unwrap()
-                .metadata()?
+                .metadata()
+                .unwrap()
                 .mode;
-            let path_with_mode = inner.path_with_mode.with_next(name, mode);
+            let path_with_mode = parent_guard.path_with_mode.with_next(name, mode);
             let opaque = {
-                let mut opaque = inner.opaque;
-                if let Some(inode) = inner.maybe_container_inode() {
+                let mut opaque = parent_guard.opaque;
+                if let Some(inode) = parent_guard.maybe_container_inode() {
                     if inode.find(&name.opaque()).is_ok() {
                         opaque = true;
                     }
                 }
                 opaque
             };
-            self.fs.create_inode(inodes, path_with_mode, opaque)
+            fs.create_inode(inodes, path_with_mode, opaque, id)
         };
-        if new_inode.metadata()?.type_ == FileType::Dir {
-            new_inode.init_entry(inner.this.upgrade().unwrap());
+        if new_inode.metadata().unwrap().type_ == FileType::Dir {
+            new_inode.init_entry(parent_guard.this.upgrade().unwrap());
         }
-        Ok(new_inode)
+        new_inode
     }
 }
 
@@ -572,47 +577,29 @@ impl INode for UnionINode {
         }
         let container_inode = inner.container_inode()?;
         container_inode.create(name, type_, mode)?;
-        let opaque = if container_inode.find(&name.whiteout()).is_ok() {
+        if container_inode.find(&name.whiteout()).is_ok() {
             match type_ {
                 // rename the whiteout file to opaque
                 FileType::Dir => {
-                    match container_inode.move_(&name.whiteout(), &container_inode, &name.opaque())
+                    if let Err(e) =
+                        container_inode.move_(&name.whiteout(), &container_inode, &name.opaque())
                     {
-                        Ok(_) => true,
-                        Err(e) => {
-                            // recover
-                            container_inode.unlink(name)?;
-                            return Err(e);
-                        }
-                    }
-                }
-                // unlink the whiteout file
-                _ => match container_inode.unlink(&name.whiteout()) {
-                    Ok(_) => inner.opaque,
-                    Err(e) => {
                         // recover
                         container_inode.unlink(name)?;
                         return Err(e);
                     }
-                },
+                }
+                // unlink the whiteout file
+                _ => {
+                    if let Err(e) = container_inode.unlink(&name.whiteout()) {
+                        // recover
+                        container_inode.unlink(name)?;
+                        return Err(e);
+                    }
+                }
             }
-        } else {
-            inner.opaque
-        };
-        let new_inode = {
-            let inodes: Vec<_> = inner.inners.iter().map(|x| x.find(name)).collect();
-            let mode = inodes
-                .iter()
-                .find_map(|v| v.as_real())
-                .unwrap()
-                .metadata()?
-                .mode;
-            let path_with_mode = inner.path_with_mode.with_next(name, mode);
-            self.fs.create_inode(inodes, path_with_mode, opaque)
-        };
-        if type_ == FileType::Dir {
-            new_inode.init_entry(inner.this.upgrade().unwrap());
         }
+        let new_inode = Self::new_inode(&self.fs, &inner, name, None);
         inner
             .entries()
             .insert(String::from(name), Some(new_inode.clone()));
@@ -804,8 +791,11 @@ impl INode for UnionINode {
                     },
                 }
             }
+            let new_inode = Self::new_inode(&self.fs, &self_inner, new_name, Some(old.id));
             self_inner.entries().remove(old_name);
-            self_inner.entries().insert(String::from(new_name), None);
+            self_inner
+                .entries()
+                .insert(String::from(new_name), Some(new_inode));
         } else {
             // self and target are different INodes
             let (mut self_inner, mut target_inner) = {
@@ -864,8 +854,11 @@ impl INode for UnionINode {
                     },
                 }
             }
+            let new_inode = Self::new_inode(&self.fs, &target_inner, new_name, Some(old.id));
             self_inner.entries().remove(old_name);
-            target_inner.entries().insert(String::from(new_name), None);
+            target_inner
+                .entries()
+                .insert(String::from(new_name), Some(new_inode));
         }
         Ok(())
     }
@@ -882,7 +875,7 @@ impl INode for UnionINode {
         if let Some(inode) = inode_option.unwrap() {
             return Ok(inode.clone());
         }
-        let new_inode = self.new_inode(&inner, name)?;
+        let new_inode = Self::new_inode(&self.fs, &inner, name, None);
         inner
             .entries()
             .insert(String::from(name), Some(new_inode.clone()));
@@ -913,7 +906,7 @@ impl INode for UnionINode {
         for name in keys.iter() {
             let inode_op = inner.entries().get(name).unwrap();
             let inode = if inode_op.is_none() {
-                let new_inode = self.new_inode(&inner, name)?;
+                let new_inode = Self::new_inode(&self.fs, &inner, name, None);
                 inner
                     .entries()
                     .insert(String::from(name), Some(new_inode.clone()));
