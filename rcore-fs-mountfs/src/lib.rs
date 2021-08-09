@@ -127,7 +127,7 @@ impl MNode {
     }
 
     /// Strong type version of `create()`
-    pub fn create(&self, name: &str, type_: FileType, mode: u32) -> Result<Arc<Self>> {
+    pub fn create(&self, name: &str, type_: FileType, mode: u16) -> Result<Arc<Self>> {
         Ok(MNode {
             inode: self.inode.create(name, type_, mode)?,
             vfs: self.vfs.clone(),
@@ -258,7 +258,7 @@ impl INode for MNode {
         self.inode.resize(len)
     }
 
-    fn create(&self, name: &str, type_: FileType, mode: u32) -> Result<Arc<dyn INode>> {
+    fn create(&self, name: &str, type_: FileType, mode: u16) -> Result<Arc<dyn INode>> {
         Ok(self.create(name, type_, mode)?)
     }
 

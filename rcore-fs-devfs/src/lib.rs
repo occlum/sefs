@@ -146,7 +146,7 @@ impl INode for DevRootINode {
         Err(FsError::IsDir)
     }
 
-    fn create(&self, _name: &str, _type_: FileType, _mode: u32) -> Result<Arc<dyn INode>> {
+    fn create(&self, _name: &str, _type_: FileType, _mode: u16) -> Result<Arc<dyn INode>> {
         Err(FsError::NotSupported)
     }
 

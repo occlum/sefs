@@ -499,7 +499,7 @@ impl vfs::INode for INodeImpl {
         &self,
         name: &str,
         type_: vfs::FileType,
-        _mode: u32,
+        _mode: u16,
         data: usize,
     ) -> vfs::Result<Arc<dyn vfs::INode>> {
         let info = self.metadata()?;

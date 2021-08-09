@@ -175,7 +175,7 @@ impl Filesystem for VfsFuse {
     ) {
         let name = name.to_str().unwrap();
         let inode = try_vfs!(reply, self.get_inode(parent));
-        let target = try_vfs!(reply, inode.create(name, vfs::FileType::File, mode));
+        let target = try_vfs!(reply, inode.create(name, vfs::FileType::File, mode as u16));
         let info = try_vfs!(reply, target.metadata());
         self.inodes.insert(info.inode, target);
         let attr = Self::trans_attr(info);
@@ -185,7 +185,7 @@ impl Filesystem for VfsFuse {
     fn mkdir(&mut self, _req: &Request, parent: u64, name: &OsStr, mode: u32, reply: ReplyEntry) {
         let name = name.to_str().unwrap();
         let inode = try_vfs!(reply, self.get_inode(parent));
-        let target = try_vfs!(reply, inode.create(name, vfs::FileType::Dir, mode));
+        let target = try_vfs!(reply, inode.create(name, vfs::FileType::Dir, mode as u16));
         let info = try_vfs!(reply, target.metadata());
         self.inodes.insert(info.inode, target);
         let attr = Self::trans_attr(info);

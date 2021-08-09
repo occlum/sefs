@@ -48,7 +48,7 @@ pub trait INode: Any + Sync + Send {
     }
 
     /// Create a new INode in the directory
-    fn create(&self, name: &str, type_: FileType, mode: u32) -> Result<Arc<dyn INode>> {
+    fn create(&self, name: &str, type_: FileType, mode: u16) -> Result<Arc<dyn INode>> {
         self.create2(name, type_, mode, 0)
     }
 
@@ -57,7 +57,7 @@ pub trait INode: Any + Sync + Send {
         &self,
         name: &str,
         type_: FileType,
-        mode: u32,
+        mode: u16,
         _data: usize,
     ) -> Result<Arc<dyn INode>> {
         self.create(name, type_, mode)
