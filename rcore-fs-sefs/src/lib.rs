@@ -344,7 +344,7 @@ impl vfs::INode for INodeImpl {
         &self,
         name: &str,
         type_: vfs::FileType,
-        mode: u32,
+        mode: u16,
     ) -> vfs::Result<Arc<dyn vfs::INode>> {
         let type_ = match type_ {
             vfs::FileType::File => FileType::File,
@@ -366,7 +366,7 @@ impl vfs::INode for INodeImpl {
         }
 
         // Create a new INode
-        let inode = self.fs.new_inode(type_, mode as u16)?;
+        let inode = self.fs.new_inode(type_, mode)?;
         if type_ == FileType::Dir {
             inode.dirent_init(self.id)?;
         }

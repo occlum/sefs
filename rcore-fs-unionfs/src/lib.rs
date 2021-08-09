@@ -335,9 +335,7 @@ impl UnionINodeInner {
             last_inode = match last_inode.find(dir_name) {
                 Ok(inode) => inode,
                 // create dirs to the base path
-                Err(FsError::EntryNotFound) => {
-                    last_inode.create(dir_name, FileType::Dir, *mode as u32)?
-                }
+                Err(FsError::EntryNotFound) => last_inode.create(dir_name, FileType::Dir, *mode)?,
                 Err(e) => return Err(e),
             };
         }
@@ -351,12 +349,11 @@ impl UnionINodeInner {
                 // create file/dir/symlink in container
                 match type_ {
                     FileType::Dir => {
-                        last_inode =
-                            last_inode.create(last_inode_name, FileType::Dir, *mode as u32)?;
+                        last_inode = last_inode.create(last_inode_name, FileType::Dir, *mode)?;
                     }
                     FileType::File => {
                         let last_file_inode =
-                            last_inode.create(last_inode_name, FileType::File, *mode as u32)?;
+                            last_inode.create(last_inode_name, FileType::File, *mode)?;
                         // copy it from image to container chunk by chunk
                         const BUF_SIZE: usize = 0x10000;
                         let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
@@ -387,7 +384,7 @@ impl UnionINodeInner {
                     }
                     FileType::SymLink => {
                         let last_link_inode =
-                            last_inode.create(last_inode_name, FileType::SymLink, *mode as u32)?;
+                            last_inode.create(last_inode_name, FileType::SymLink, *mode)?;
                         let data = match self.inode().read_as_vec() {
                             Ok(data) => data,
                             Err(e) => {
@@ -564,7 +561,7 @@ impl INode for UnionINode {
         inner.container_inode()?.resize(len)
     }
 
-    fn create(&self, name: &str, type_: FileType, mode: u32) -> Result<Arc<dyn INode>> {
+    fn create(&self, name: &str, type_: FileType, mode: u16) -> Result<Arc<dyn INode>> {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }

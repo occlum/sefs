@@ -189,7 +189,7 @@ impl INode for LockedINode {
         &self,
         name: &str,
         type_: FileType,
-        mode: u32,
+        mode: u16,
         data: usize,
     ) -> Result<Arc<dyn INode>> {
         let mut file = self.0.write();
@@ -217,7 +217,7 @@ impl INode for LockedINode {
                 mtime: Timespec { sec: 0, nsec: 0 },
                 ctime: Timespec { sec: 0, nsec: 0 },
                 type_,
-                mode: mode as u16,
+                mode,
                 nlinks: 1,
                 uid: 0,
                 gid: 0,

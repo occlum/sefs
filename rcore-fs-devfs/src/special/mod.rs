@@ -16,7 +16,7 @@ macro_rules! impl_inode {
         fn resize(&self, _len: usize) -> Result<()> {
             Err(FsError::NotSupported)
         }
-        fn create(&self, _name: &str, _type_: FileType, _mode: u32) -> Result<Arc<dyn INode>> {
+        fn create(&self, _name: &str, _type_: FileType, _mode: u16) -> Result<Arc<dyn INode>> {
             Err(FsError::NotDir)
         }
         fn unlink(&self, _name: &str) -> Result<()> {
