@@ -161,7 +161,7 @@ pub trait INode: Any + Sync + Send {
                     rest_path = String::from(rest_path[pos + 1..].trim_start_matches('/'));
                 }
             };
-            if name == "" {
+            if name.is_empty() {
                 continue;
             }
             let inode = result.find(&name)?;

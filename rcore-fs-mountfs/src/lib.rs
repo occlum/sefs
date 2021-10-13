@@ -67,7 +67,7 @@ impl MountFS {
     }
 
     /// Strong type version of `root_inode`
-    pub fn root_inode(&self) -> Arc<MNode> {
+    pub fn mountpoint_root_inode(&self) -> Arc<MNode> {
         MNode {
             inode: self.inner.root_inode(),
             vfs: self.self_ref.upgrade().unwrap(),
@@ -94,6 +94,10 @@ impl MNode {
 
     /// Mount file system `fs` at this INode
     pub fn mount(&self, fs: Arc<dyn FileSystem>) -> Result<Arc<MountFS>> {
+        let metadata = self.inode.metadata()?;
+        if metadata.type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
         let new_fs = MountFS {
             inner: fs,
             mountpoints: RwLock::new(BTreeMap::new()),
@@ -101,11 +105,10 @@ impl MNode {
             self_ref: Weak::default(),
         }
         .wrap();
-        let inode_id = self.inode.metadata()?.inode;
         self.vfs
             .mountpoints
             .write()
-            .insert(inode_id, new_fs.clone());
+            .insert(metadata.inode, new_fs.clone());
         Ok(new_fs)
     }
 
@@ -114,14 +117,14 @@ impl MNode {
     fn overlaid_inode(&self) -> Arc<MNode> {
         let inode_id = self.metadata().unwrap().inode;
         if let Some(sub_vfs) = self.vfs.mountpoints.read().get(&inode_id) {
-            sub_vfs.root_inode()
+            sub_vfs.mountpoint_root_inode()
         } else {
             self.self_ref.upgrade().unwrap()
         }
     }
 
     /// Is the root INode of its FS?
-    fn is_root(&self) -> bool {
+    fn is_mountpoint_root(&self) -> bool {
         self.inode.fs().root_inode().metadata().unwrap().inode
             == self.inode.metadata().unwrap().inode
     }
@@ -149,7 +152,7 @@ impl MNode {
                 // TODO: check going up.
                 if root {
                     Ok(self.self_ref.upgrade().unwrap())
-                } else if self.is_root() {
+                } else if self.is_mountpoint_root() {
                     // Here is mountpoint.
                     match &self.vfs.self_mountpoint {
                         Some(inode) => inode.find(root, ".."),
@@ -212,7 +215,10 @@ impl FileSystem for MountFS {
     }
 
     fn root_inode(&self) -> Arc<dyn INode> {
-        self.root_inode()
+        match &self.self_mountpoint {
+            Some(inode) => inode.vfs.root_inode(),
+            None => self.mountpoint_root_inode(),
+        }
     }
 
     fn info(&self) -> FsInfo {
