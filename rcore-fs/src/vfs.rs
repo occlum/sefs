@@ -513,6 +513,34 @@ pub trait DirentWriter {
     fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize>;
 }
 
+/// Helper macro to write dirent entry of one INode
+#[macro_export]
+macro_rules! write_inode_entry {
+    ($ctx:expr, $name:expr, $inode:expr, $total_written:expr) => {
+        let ctx = $ctx;
+        let name = $name;
+        let inode = $inode;
+        let total_written = $total_written;
+
+        match ctx.write_entry(
+            name,
+            inode.metadata()?.inode as u64,
+            inode.metadata()?.type_,
+        ) {
+            Ok(written_len) => {
+                *total_written += written_len;
+            }
+            Err(e) => {
+                if *total_written == 0 {
+                    return Err(e);
+                } else {
+                    return Ok(*total_written);
+                }
+            }
+        }
+    };
+}
+
 pub fn make_rdev(major: usize, minor: usize) -> usize {
     ((major & 0xfff) << 8) | (minor & 0xff)
 }

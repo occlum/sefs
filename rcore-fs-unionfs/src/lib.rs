@@ -10,7 +10,7 @@ extern crate log;
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
-    string::String,
+    string::{String, ToString},
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -64,10 +64,29 @@ struct UnionINodeInner {
     inners: Vec<VirtualINode>,
     /// Reference to myself
     this: Weak<UnionINode>,
+    /// Reference to parent
+    parent: Weak<UnionINode>,
     /// Whether uppper directory occludes lower directory
     opaque: bool,
     /// Merged directory entries.
-    cached_entries: BTreeMap<String, Option<Arc<dyn INode>>>,
+    cached_entries: EntriesMap,
+}
+
+/// Directory entries
+struct EntriesMap {
+    /// HashMap of the entries
+    map: BTreeMap<String, Option<Arc<dyn INode>>>,
+    /// Whether the map is merged already
+    is_merged: bool,
+}
+
+impl EntriesMap {
+    fn new() -> Self {
+        Self {
+            map: BTreeMap::new(),
+            is_merged: false,
+        }
+    }
 }
 
 /// A virtual INode of a path in a FS
@@ -177,15 +196,16 @@ impl UnionFS {
             fs: fs.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners,
-                cached_entries: BTreeMap::new(),
+                cached_entries: EntriesMap::new(),
                 this: Weak::default(),
+                parent: Weak::default(),
                 path_with_mode: PathWithMode::new(),
                 opaque: false,
             }),
             ext: Extension::new(),
         });
         root_inode.inner.write().this = Arc::downgrade(&root_inode);
-        root_inode.init_entry(root_inode.clone());
+        root_inode.inner.write().parent = Arc::downgrade(&root_inode);
         root_inode
     }
 
@@ -198,20 +218,19 @@ impl UnionFS {
         id: Option<usize>,
         ext: Option<Extension>,
     ) -> Arc<UnionINode> {
-        let new_inode = Arc::new(UnionINode {
+        Arc::new(UnionINode {
             id: id.unwrap_or_else(|| self.alloc_inode_id()),
             fs: self.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners: inodes,
-                cached_entries: BTreeMap::new(),
+                cached_entries: EntriesMap::new(),
                 this: Weak::default(),
+                parent: Weak::default(),
                 path_with_mode,
                 opaque,
             }),
             ext: ext.unwrap_or_default(),
-        });
-        new_inode.inner.write().this = Arc::downgrade(&new_inode);
-        new_inode
+        })
     }
 
     /// Allocate an INode ID
@@ -274,6 +293,10 @@ impl UnionINodeInner {
                     break;
                 }
                 for name in inode.list()? {
+                    // skip the two special entries
+                    if name.is_self() || name.is_parent() {
+                        continue;
+                    }
                     entries.insert(name, None);
                 }
             }
@@ -281,7 +304,12 @@ impl UnionINodeInner {
         // container
         if let Some(inode) = inners[0].as_real() {
             for name in inode.list()? {
-                if name.starts_with(OPAQUE_PREFIX) || name == MAC_FILE {
+                // skip the special entries
+                if name.starts_with(OPAQUE_PREFIX)
+                    || name == MAC_FILE
+                    || name.is_self()
+                    || name.is_parent()
+                {
                     continue;
                 }
                 if name.starts_with(WH_PREFIX) {
@@ -297,14 +325,13 @@ impl UnionINodeInner {
 
     /// Get the merged directory entries, the upper INode must to be a directory
     pub fn entries(&mut self) -> &mut BTreeMap<String, Option<Arc<dyn INode>>> {
-        let cache = &mut self.cached_entries;
-        if cache.is_empty() {
+        let cache = &mut self.cached_entries.map;
+        if !self.cached_entries.is_merged {
             let entries = Self::merge_entries(&self.inners, self.opaque).unwrap();
             //debug!("{:?} cached dirents: {:?}", self.path, entries.keys());
             *cache = entries;
+            self.cached_entries.is_merged = true;
         }
-        // at least "." and ".."
-        assert!(cache.len() >= 2);
         cache
     }
 
@@ -466,16 +493,8 @@ impl FileSystem for UnionFS {
 }
 
 impl UnionINode {
-    /// Initialize the entries of directory
-    pub fn init_entry(&self, parent: Arc<UnionINode>) {
-        let mut inner = self.inner.write();
-        inner.entries().insert(String::from(".."), Some(parent));
-        let this = inner.this.upgrade().unwrap();
-        inner.entries().insert(String::from("."), Some(this));
-    }
-
-    /// Helper function to create an UnionINode, if `id` is provided, use it as
-    /// the inode id of new inode, or just allocate a new one.
+    /// Helper function to create a child UnionINode, if `id` is provided, use it as
+    /// the inode id of the new inode, or just allocate a new one.
     fn new_inode(
         fs: &Arc<UnionFS>,
         parent_guard: &RwLockWriteGuard<UnionINodeInner>,
@@ -505,7 +524,8 @@ impl UnionINode {
             fs.create_inode(inodes, path_with_mode, opaque, id, ext)
         };
         if new_inode.metadata().unwrap().type_ == FileType::Dir {
-            new_inode.init_entry(parent_guard.this.upgrade().unwrap());
+            new_inode.inner.write().this = Arc::downgrade(&new_inode);
+            new_inode.inner.write().parent = Arc::downgrade(&parent_guard.this.upgrade().unwrap());
         }
         new_inode
     }
@@ -574,8 +594,11 @@ impl INode for UnionINode {
         if name.is_reserved() {
             return Err(FsError::InvalidParam);
         }
+        if name.is_self() || name.is_parent() {
+            return Err(FsError::EntryExist);
+        }
         let mut inner = self.inner.write();
-        if inner.entries().get(name).is_some() {
+        if inner.entries().contains_key(name) {
             return Err(FsError::EntryExist);
         }
         let container_inode = inner.container_inode()?;
@@ -616,8 +639,11 @@ impl INode for UnionINode {
         if name.is_reserved() {
             return Err(FsError::InvalidParam);
         }
+        if name.is_self() || name.is_parent() {
+            return Err(FsError::EntryExist);
+        }
         let mut inner = self.inner.write();
-        if inner.entries().get(name).is_some() {
+        if inner.entries().contains_key(name) {
             return Err(FsError::EntryExist);
         }
         let child = other
@@ -649,7 +675,7 @@ impl INode for UnionINode {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if name == "." || name == ".." {
+        if name.is_self() || name.is_parent() {
             return Err(FsError::IsDir);
         }
         let inode = self.find(name)?;
@@ -659,7 +685,7 @@ impl INode for UnionINode {
         }
         let mut inner = self.inner.write();
         // when we got the lock, the entry may have been removed by another thread
-        if inner.entries().get(name).is_none() {
+        if !inner.entries().contains_key(name) {
             return Err(FsError::EntryNotFound);
         }
         // if file is in container, remove directly
@@ -697,10 +723,10 @@ impl INode for UnionINode {
     }
 
     fn move_(&self, old_name: &str, target: &Arc<dyn INode>, new_name: &str) -> Result<()> {
-        if old_name == "." || old_name == ".." {
+        if old_name.is_self() || old_name.is_parent() {
             return Err(FsError::IsDir);
         }
-        if new_name == "." || new_name == ".." {
+        if new_name.is_self() || new_name.is_parent() {
             return Err(FsError::IsDir);
         }
         if new_name.is_reserved() {
@@ -883,6 +909,14 @@ impl INode for UnionINode {
             return Err(FsError::NotDir);
         }
         let mut inner = self.inner.write();
+
+        // Handle the two special entries
+        if name.is_self() {
+            return Ok(inner.this.upgrade().unwrap());
+        } else if name.is_parent() {
+            return Ok(inner.parent.upgrade().unwrap());
+        }
+
         let inode_option = inner.entries().get(name);
         if inode_option.is_none() {
             return Err(FsError::EntryNotFound);
@@ -901,23 +935,43 @@ impl INode for UnionINode {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let mut inner = self.inner.write();
-        let entries = inner.entries();
-        if id >= entries.len() {
-            Err(FsError::EntryNotFound)
-        } else {
-            Ok(entries.iter().nth(id).unwrap().0.clone())
+        match id {
+            0 => Ok(String::from(".")),
+            1 => Ok(String::from("..")),
+            i => {
+                let mut inner = self.inner.write();
+                let entries = inner.entries();
+                if let Some(s) = entries.keys().nth(i - 2) {
+                    Ok(s.to_string())
+                } else {
+                    Err(FsError::EntryNotFound)
+                }
+            }
         }
     }
 
-    fn iterate_entries(&self, ctx: &mut DirentWriterContext) -> Result<usize> {
+    fn iterate_entries(&self, mut ctx: &mut DirentWriterContext) -> Result<usize> {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
         let idx = ctx.pos();
         let mut total_written_len = 0;
+        if idx == 0 {
+            let this_inode = self.inner.read().this.upgrade().unwrap();
+            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode, &mut total_written_len);
+        }
+        if idx <= 1 {
+            let parent_inode = self.inner.read().parent.upgrade().unwrap();
+            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode, &mut total_written_len);
+        }
         let mut inner = self.inner.write();
-        let keys: Vec<_> = inner.entries().keys().skip(idx).cloned().collect();
+        let skipped_children = if idx < 2 { 0 } else { idx - 2 };
+        let keys: Vec<_> = inner
+            .entries()
+            .keys()
+            .skip(skipped_children)
+            .cloned()
+            .collect();
         for name in keys.iter() {
             let inode_op = inner.entries().get(name).unwrap();
             let inode = if inode_op.is_none() {
@@ -929,22 +983,7 @@ impl INode for UnionINode {
             } else {
                 inode_op.as_ref().unwrap().clone()
             };
-            let (ino, type_) = match name.as_ref() {
-                "." => (self.id, FileType::Dir),
-                ".." if self.id == ROOT_INODE_ID => (self.id, FileType::Dir),
-                _ => (inode.metadata()?.inode, inode.metadata()?.type_),
-            };
-            let written_len = match ctx.write_entry(name, ino as u64, type_) {
-                Ok(written_len) => written_len,
-                Err(e) => {
-                    if total_written_len == 0 {
-                        return Err(e);
-                    } else {
-                        break;
-                    }
-                }
-            };
-            total_written_len += written_len;
+            rcore_fs::write_inode_entry!(&mut ctx, name, inode, &mut total_written_len);
         }
         Ok(total_written_len)
     }
@@ -1003,6 +1042,8 @@ trait NameExt {
     fn whiteout(&self) -> String;
     fn opaque(&self) -> String;
     fn is_reserved(&self) -> bool;
+    fn is_self(&self) -> bool;
+    fn is_parent(&self) -> bool;
 }
 
 impl NameExt for str {
@@ -1016,5 +1057,13 @@ impl NameExt for str {
 
     fn is_reserved(&self) -> bool {
         self.starts_with(WH_PREFIX) || self.starts_with(OPAQUE_PREFIX) || self == MAC_FILE
+    }
+
+    fn is_self(&self) -> bool {
+        self == "."
+    }
+
+    fn is_parent(&self) -> bool {
+        self == ".."
     }
 }
