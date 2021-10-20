@@ -69,13 +69,13 @@ struct UnionINodeInner {
     /// Whether uppper directory occludes lower directory
     opaque: bool,
     /// Merged directory entries.
-    cached_entries: EntriesMap,
+    cached_children: EntriesMap,
 }
 
 /// Directory entries
 struct EntriesMap {
     /// HashMap of the entries
-    map: BTreeMap<String, Option<Arc<dyn INode>>>,
+    map: BTreeMap<String, Option<Entry>>,
     /// Whether the map is merged already
     is_merged: bool,
 }
@@ -85,6 +85,39 @@ impl EntriesMap {
         Self {
             map: BTreeMap::new(),
             is_merged: false,
+        }
+    }
+}
+
+/// Directory entry. It holds the reference to the real INode
+enum Entry {
+    /// A weak reference to the file/symlink INode with inode_id to re-new the INode
+    /// if it is dropped
+    File(Weak<UnionINode>, usize),
+    /// A Strong reference to the dir INode
+    Dir(Arc<UnionINode>),
+}
+
+impl Entry {
+    fn new(inode: &Arc<UnionINode>) -> Self {
+        if inode.metadata().unwrap().type_ == FileType::Dir {
+            Self::Dir(Arc::clone(inode))
+        } else {
+            Self::File(Arc::downgrade(inode), inode.id)
+        }
+    }
+
+    fn as_inode(&self) -> Option<Arc<UnionINode>> {
+        match self {
+            Self::Dir(inode) => Some(Arc::clone(inode)),
+            Self::File(weak_inode, _) => weak_inode.upgrade(),
+        }
+    }
+
+    fn id(&self) -> Option<usize> {
+        match self {
+            Self::File(_, id) => Some(*id),
+            _ => None,
         }
     }
 }
@@ -196,7 +229,7 @@ impl UnionFS {
             fs: fs.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners,
-                cached_entries: EntriesMap::new(),
+                cached_children: EntriesMap::new(),
                 this: Weak::default(),
                 parent: Weak::default(),
                 path_with_mode: PathWithMode::new(),
@@ -223,7 +256,7 @@ impl UnionFS {
             fs: self.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners: inodes,
-                cached_entries: EntriesMap::new(),
+                cached_children: EntriesMap::new(),
                 this: Weak::default(),
                 parent: Weak::default(),
                 path_with_mode,
@@ -282,7 +315,7 @@ impl UnionINodeInner {
     fn merge_entries(
         inners: &[VirtualINode],
         opaque: bool,
-    ) -> Result<BTreeMap<String, Option<Arc<dyn INode>>>> {
+    ) -> Result<BTreeMap<String, Option<Entry>>> {
         let mut entries = BTreeMap::new();
         // images
         if !opaque {
@@ -324,13 +357,13 @@ impl UnionINodeInner {
     }
 
     /// Get the merged directory entries, the upper INode must to be a directory
-    pub fn entries(&mut self) -> &mut BTreeMap<String, Option<Arc<dyn INode>>> {
-        let cache = &mut self.cached_entries.map;
-        if !self.cached_entries.is_merged {
+    pub fn entries(&mut self) -> &mut BTreeMap<String, Option<Entry>> {
+        let cache = &mut self.cached_children.map;
+        if !self.cached_children.is_merged {
             let entries = Self::merge_entries(&self.inners, self.opaque).unwrap();
             //debug!("{:?} cached dirents: {:?}", self.path, entries.keys());
             *cache = entries;
-            self.cached_entries.is_merged = true;
+            self.cached_children.is_merged = true;
         }
         cache
     }
@@ -628,7 +661,7 @@ impl INode for UnionINode {
         let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
         inner
             .entries()
-            .insert(String::from(name), Some(new_inode.clone()));
+            .insert(String::from(name), Some(Entry::new(&new_inode)));
         Ok(new_inode)
     }
 
@@ -830,7 +863,7 @@ impl INode for UnionINode {
             self_inner.entries().remove(old_name);
             self_inner
                 .entries()
-                .insert(String::from(new_name), Some(new_inode));
+                .insert(String::from(new_name), Some(Entry::new(&new_inode)));
         } else {
             // self and target are different INodes
             let (mut self_inner, mut target_inner) = {
@@ -899,7 +932,7 @@ impl INode for UnionINode {
             self_inner.entries().remove(old_name);
             target_inner
                 .entries()
-                .insert(String::from(new_name), Some(new_inode));
+                .insert(String::from(new_name), Some(Entry::new(&new_inode)));
         }
         Ok(())
     }
@@ -917,17 +950,22 @@ impl INode for UnionINode {
             return Ok(inner.parent.upgrade().unwrap());
         }
 
-        let inode_option = inner.entries().get(name);
-        if inode_option.is_none() {
+        let entry_op = inner.entries().get(name);
+        if entry_op.is_none() {
             return Err(FsError::EntryNotFound);
         }
-        if let Some(inode) = inode_option.unwrap() {
-            return Ok(inode.clone());
-        }
-        let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
+        let reused_id = if let Some(entry) = entry_op.unwrap() {
+            if let Some(inode) = entry.as_inode() {
+                return Ok(inode);
+            }
+            entry.id()
+        } else {
+            None
+        };
+        let new_inode = Self::new_inode(&self.fs, &inner, name, reused_id, None);
         inner
             .entries()
-            .insert(String::from(name), Some(new_inode.clone()));
+            .insert(String::from(name), Some(Entry::new(&new_inode)));
         Ok(new_inode)
     }
 
@@ -956,6 +994,7 @@ impl INode for UnionINode {
         }
         let idx = ctx.pos();
         let mut total_written_len = 0;
+
         if idx == 0 {
             let this_inode = self.inner.read().this.upgrade().unwrap();
             rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode, &mut total_written_len);
@@ -964,6 +1003,7 @@ impl INode for UnionINode {
             let parent_inode = self.inner.read().parent.upgrade().unwrap();
             rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode, &mut total_written_len);
         }
+
         let mut inner = self.inner.write();
         let skipped_children = if idx < 2 { 0 } else { idx - 2 };
         let keys: Vec<_> = inner
@@ -973,15 +1013,23 @@ impl INode for UnionINode {
             .cloned()
             .collect();
         for name in keys.iter() {
-            let inode_op = inner.entries().get(name).unwrap();
-            let inode = if inode_op.is_none() {
-                let new_inode = Self::new_inode(&self.fs, &inner, name, None, None);
-                inner
-                    .entries()
-                    .insert(String::from(name), Some(new_inode.clone()));
-                new_inode
-            } else {
-                inode_op.as_ref().unwrap().clone()
+            let entry_op = inner.entries().get(name).unwrap();
+            let inode = {
+                let (inode_op, reused_id) = if let Some(entry) = entry_op {
+                    (entry.as_inode(), entry.id())
+                } else {
+                    (None, None)
+                };
+                match inode_op {
+                    Some(inode) => inode,
+                    None => {
+                        let new_inode = Self::new_inode(&self.fs, &inner, name, reused_id, None);
+                        inner
+                            .entries()
+                            .insert(String::from(name), Some(Entry::new(&new_inode)));
+                        new_inode
+                    }
+                }
             };
             rcore_fs::write_inode_entry!(&mut ctx, name, inode, &mut total_written_len);
         }
