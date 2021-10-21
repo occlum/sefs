@@ -291,6 +291,15 @@ impl INode for LockedINode {
         if target.0.read().extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
+        // Disallow to make a directory a subdirectory of itself
+        // Note: We have already add a check in Occlum to verify if the newpath
+        //       contained a path prefix of the oldpath
+        // Add the check here to avoid deadlock
+        // TODO: How to know if target is a descendant of old ?
+        if inode.0.read().extra.inode == target.0.read().extra.inode {
+            return Err(FsError::InvalidParam);
+        }
+
         if let Some(dest_inode) = target.0.read().children.get(new_name) {
             if inode.0.read().extra.inode == dest_inode.0.read().extra.inode {
                 return Ok(());
