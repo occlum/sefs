@@ -765,9 +765,10 @@ impl INode for UnionINode {
         if new_name.is_reserved() {
             return Err(FsError::InvalidParam);
         }
-        let old_inode = self.find(old_name)?;
-        let old = old_inode.downcast_ref::<UnionINode>().unwrap();
-        let old_inode_type = old_inode.metadata()?.type_;
+
+        let old = self.find(old_name)?;
+        let old = old.downcast_ref::<UnionINode>().unwrap();
+        let old_inode_type = old.metadata()?.type_;
         // return error when moving a directory from image to container
         // TODO: support the "redirect_dir" feature
         // [Ref](https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html#renaming-directories)
@@ -780,8 +781,17 @@ impl INode for UnionINode {
         if target.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
+        // Disallow to make a directory a subdirectory of itself
+        // Note: We have already add a check in Occlum to verify if the newpath
+        //       contained a path prefix of the oldpath
+        // Add the check here to avoid deadlock
+        // TODO: How to know if target is a descendant of old ?
+        if old.metadata()?.inode == target.metadata()?.inode {
+            return Err(FsError::InvalidParam);
+        }
+
         if let Ok(new_inode) = target.find(new_name) {
-            if old_inode.metadata()?.inode == new_inode.metadata()?.inode {
+            if old.metadata()?.inode == new_inode.metadata()?.inode {
                 return Ok(());
             }
             let new_inode_type = new_inode.metadata()?.type_;
@@ -803,6 +813,7 @@ impl INode for UnionINode {
             }
             target.unlink(new_name)?;
         }
+
         // ensure 'old_name' exists in container
         // copy the file from image on necessary
         old.inner.write().container_inode()?;
