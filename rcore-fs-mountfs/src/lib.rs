@@ -112,6 +112,31 @@ impl MNode {
         Ok(new_fs)
     }
 
+    /// Umount the file system of this INode from the upper INode
+    pub fn umount(&self) -> Result<()> {
+        let metadata = self.inode.metadata()?;
+        if metadata.type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        if !self.is_mountpoint_root() {
+            return Err(FsError::NotMountPoint);
+        }
+
+        // Here it is the mountpoint
+        match &self.vfs.self_mountpoint {
+            Some(inode) => {
+                self.vfs.sync()?;
+                let inode_id = inode.metadata().unwrap().inode;
+                inode.vfs.mountpoints.write().remove(&inode_id);
+            }
+            // root fs
+            None => {
+                return Err(FsError::PermError);
+            }
+        }
+        Ok(())
+    }
+
     /// Get the root INode of the mounted fs at here.
     /// Return self if no mounted fs.
     fn overlaid_inode(&self) -> Arc<MNode> {

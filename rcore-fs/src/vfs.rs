@@ -379,6 +379,7 @@ pub enum FsError {
     NameTooLong,    // E_NAMETOOLONG
     FileTooBig,     // E_FBIG
     OpNotSupported, // E_OPNOTSUPP
+    NotMountPoint,  // E_INVAL
 }
 
 impl fmt::Display for FsError {
