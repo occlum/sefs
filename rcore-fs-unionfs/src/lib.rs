@@ -37,7 +37,7 @@ pub struct UnionFS {
     /// Weak reference to self
     self_ref: Weak<UnionFS>,
     /// Root INode
-    root_inode: Option<Arc<UnionINode>>,
+    root_inode: RwLock<Weak<UnionINode>>,
     /// Allocate INode ID
     next_inode_id: AtomicUsize,
 }
@@ -153,7 +153,7 @@ impl UnionFS {
         Ok(UnionFS {
             inners: fs,
             self_ref: Weak::default(),
-            root_inode: None,
+            root_inode: RwLock::new(Weak::default()),
             next_inode_id: AtomicUsize::new(ROOT_INODE_ID + 1),
         }
         .wrap())
@@ -166,16 +166,15 @@ impl UnionFS {
         unsafe {
             Arc::get_mut_unchecked(&mut fs).self_ref = Arc::downgrade(&fs);
         }
-        let root_inode = Self::new_root_inode(&fs);
-        unsafe {
-            Arc::get_mut_unchecked(&mut fs).root_inode = Some(root_inode);
-        }
         fs
     }
 
     /// Strong type version of `root_inode`
     pub fn root_inode(&self) -> Arc<UnionINode> {
-        (*self.root_inode.as_ref().unwrap()).clone()
+        if let Some(root_inode) = self.root_inode.read().upgrade() {
+            return root_inode;
+        }
+        self.new_root_inode()
     }
 
     /// Verify the MAC(s) in file with the input FS
@@ -214,9 +213,9 @@ impl UnionFS {
         Ok(())
     }
 
-    /// Create a new root INode, only use in the constructor
-    fn new_root_inode(fs: &Arc<Self>) -> Arc<UnionINode> {
-        let inners = fs
+    /// Create a new root INode
+    fn new_root_inode(&self) -> Arc<UnionINode> {
+        let inners = self
             .inners
             .iter()
             .map(|fs| VirtualINode {
@@ -226,7 +225,7 @@ impl UnionFS {
             .collect();
         let root_inode = Arc::new(UnionINode {
             id: ROOT_INODE_ID,
-            fs: fs.self_ref.upgrade().unwrap(),
+            fs: self.self_ref.upgrade().unwrap(),
             inner: RwLock::new(UnionINodeInner {
                 inners,
                 cached_children: EntriesMap::new(),
@@ -239,6 +238,7 @@ impl UnionFS {
         });
         root_inode.inner.write().this = Arc::downgrade(&root_inode);
         root_inode.inner.write().parent = Arc::downgrade(&root_inode);
+        *self.root_inode.write() = Arc::downgrade(&root_inode);
         root_inode
     }
 
