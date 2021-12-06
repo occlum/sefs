@@ -140,7 +140,7 @@ pub trait INode: Any + Sync + Send {
         let mut follow_times = 0;
         let mut result = self.find(".")?;
         let mut rest_path = String::from(path);
-        while rest_path != "" {
+        while !rest_path.is_empty() {
             if result.metadata()?.type_ != FileType::Dir {
                 return Err(FsError::NotDir);
             }
@@ -196,6 +196,7 @@ pub trait INode: Any + Sync + Send {
     fn read_as_vec(&self) -> Result<Vec<u8>> {
         let size = self.metadata()?.size;
         let mut buf = Vec::with_capacity(size);
+        buf.spare_capacity_mut();
         unsafe {
             buf.set_len(size);
         }
@@ -246,7 +247,7 @@ pub struct PollStatus {
 
 /// Metadata of INode
 ///
-/// Ref: [http://pubs.opengroup.org/onlinepubs/009604499/basedefs/sys/stat.h.html]
+/// Ref: <http://pubs.opengroup.org/onlinepubs/009604499/basedefs/sys/stat.h.html>
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Metadata {
     /// Device ID
@@ -309,7 +310,7 @@ pub type FsMac = [u8; FS_MAC_SIZE];
 
 /// Metadata of FileSystem
 ///
-/// Ref: [http://pubs.opengroup.org/onlinepubs/9699919799/]
+/// Ref: <http://pubs.opengroup.org/onlinepubs/9699919799/>
 #[derive(Debug, Default)]
 pub struct FsInfo {
     /// File system type

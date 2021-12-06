@@ -93,13 +93,10 @@ impl<T: BlockDevice> BlockDevice for BlockCache<T> {
 
     fn read_at(&self, block_id: BlockId, buffer: &mut [u8]) -> DevResult<()> {
         let mut buf = self.get_buf(block_id);
-        match buf.status {
-            BufStatus::Unused => {
-                // read from device
-                self.device.read_at(block_id, &mut buf.data)?;
-                buf.status = BufStatus::Valid(block_id);
-            }
-            _ => {}
+        if let BufStatus::Unused = buf.status {
+            // read from device
+            self.device.read_at(block_id, &mut buf.data)?;
+            buf.status = BufStatus::Valid(block_id);
         }
         let len = 1 << Self::BLOCK_SIZE_LOG2 as usize;
         buffer[..len].copy_from_slice(&buf.data);

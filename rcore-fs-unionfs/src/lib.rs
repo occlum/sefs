@@ -730,7 +730,7 @@ impl INode for UnionINode {
                     .iter()
                     .filter(|elem| elem.as_str() != "." && elem.as_str() != "..")
                 {
-                    inode.unlink(&elem)?;
+                    inode.unlink(elem)?;
                 }
                 dir_inode.unlink(name)?;
                 if dir_inode.find(&name.opaque()).is_ok() {
@@ -821,13 +821,13 @@ impl INode for UnionINode {
         if self.metadata()?.inode == target.metadata()?.inode {
             let mut self_inner = self.inner.write();
             let self_inode = self_inner.maybe_container_inode().unwrap();
-            self_inode.move_(old_name, &self_inode, new_name)?;
+            self_inode.move_(old_name, self_inode, new_name)?;
             if old.inner.read().has_image_inode() {
                 match self_inode.create(&old_name.whiteout(), FileType::File, 0o777) {
                     Ok(_) => {}
                     Err(e) => {
                         // recover
-                        self_inode.move_(new_name, &self_inode, old_name)?;
+                        self_inode.move_(new_name, self_inode, old_name)?;
                         return Err(e);
                     }
                 }
@@ -835,27 +835,26 @@ impl INode for UnionINode {
             if self_inode.find(&new_name.whiteout()).is_ok() {
                 match old_inode_type {
                     // if is a directory, rename the whiteout to opaque
-                    FileType::Dir => match self_inode.move_(
-                        &new_name.whiteout(),
-                        &self_inode,
-                        &new_name.opaque(),
-                    ) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            // recover
-                            self_inode.move_(new_name, &self_inode, old_name)?;
-                            if old.inner.read().has_image_inode() {
-                                self_inode.unlink(&old_name.whiteout())?;
+                    FileType::Dir => {
+                        match self_inode.move_(&new_name.whiteout(), self_inode, &new_name.opaque())
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                // recover
+                                self_inode.move_(new_name, self_inode, old_name)?;
+                                if old.inner.read().has_image_inode() {
+                                    self_inode.unlink(&old_name.whiteout())?;
+                                }
+                                return Err(e);
                             }
-                            return Err(e);
                         }
-                    },
+                    }
                     // if is a file, unlink the whiteout file
                     _ => match self_inode.unlink(&new_name.whiteout()) {
                         Ok(_) => {}
                         Err(e) => {
                             // recover
-                            self_inode.move_(new_name, &self_inode, old_name)?;
+                            self_inode.move_(new_name, self_inode, old_name)?;
                             if old.inner.read().has_image_inode() {
                                 self_inode.unlink(&old_name.whiteout())?;
                             }
@@ -896,7 +895,7 @@ impl INode for UnionINode {
                     Ok(_) => {}
                     Err(e) => {
                         // recover
-                        target_inode.move_(new_name, &self_inode, old_name)?;
+                        target_inode.move_(new_name, self_inode, old_name)?;
                         return Err(e);
                     }
                 }
@@ -912,7 +911,7 @@ impl INode for UnionINode {
                         Ok(_) => {}
                         Err(e) => {
                             // recover
-                            target_inode.move_(new_name, &self_inode, old_name)?;
+                            target_inode.move_(new_name, self_inode, old_name)?;
                             if old.inner.read().has_image_inode() {
                                 self_inode.unlink(&old_name.whiteout())?;
                             }
@@ -924,7 +923,7 @@ impl INode for UnionINode {
                         Ok(_) => (),
                         Err(e) => {
                             // recover
-                            target_inode.move_(new_name, &self_inode, old_name)?;
+                            target_inode.move_(new_name, self_inode, old_name)?;
                             if old.inner.read().has_image_inode() {
                                 self_inode.unlink(&old_name.whiteout())?;
                             }

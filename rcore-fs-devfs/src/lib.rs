@@ -170,7 +170,7 @@ impl INode for DevRootINode {
                 .devs
                 .read()
                 .get(name)
-                .map(|d| d.clone())
+                .cloned()
                 .ok_or(FsError::EntryNotFound),
         }
     }
