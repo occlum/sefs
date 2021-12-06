@@ -67,7 +67,7 @@ impl<T: BlockDevice> Device for T {
                 // Read to local buf first
                 try0!(len, BlockDevice::read_at(self, range.block, &mut block_buf));
                 // Copy to target buf then
-                buf.copy_from_slice(&mut block_buf[range.begin..range.end]);
+                buf.copy_from_slice(&block_buf[range.begin..range.end]);
             }
         }
         Ok(buf.len())

@@ -1050,10 +1050,9 @@ impl SEFS {
             fs: self.self_ptr.upgrade().unwrap(),
         });
         #[cfg(not(feature = "create_image"))]
-        match create {
-            false => inode.check_integrity(),
-            _ => {}
-        };
+        if let false = create {
+            inode.check_integrity()
+        }
         self.inodes.write().insert(id, Arc::downgrade(&inode));
         Ok(inode)
     }
@@ -1110,7 +1109,7 @@ impl SEFS {
             .map(|(&id, _)| id)
             .collect();
         for id in remove_ids.iter() {
-            inodes.remove(&id);
+            inodes.remove(id);
         }
     }
 
@@ -1172,7 +1171,7 @@ trait BitsetAlloc {
 impl BitsetAlloc for BitVec<Lsb0, u8> {
     fn alloc(&mut self) -> Option<usize> {
         // TODO: more efficient
-        let id = self.iter().position(|&bit| bit == true);
+        let id = self.iter().position(|&bit| bit);
         if let Some(id) = id {
             self.set(id, false);
         }

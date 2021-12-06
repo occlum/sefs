@@ -1,3 +1,4 @@
+#![feature(vec_spare_capacity)]
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
 #[macro_use]
