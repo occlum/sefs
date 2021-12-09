@@ -340,7 +340,7 @@ impl INodeImpl {
 impl vfs::INode for INodeImpl {
     fn read_at(&self, offset: usize, buf: &mut [u8]) -> vfs::Result<usize> {
         let DiskINode { type_, size, .. } = **self.disk_inode.read();
-        if type_ != FileType::File && type_ != FileType::SymLink {
+        if type_ != FileType::File && type_ != FileType::SymLink && type_ != FileType::Socket {
             return Err(FsError::NotFile);
         }
         let len = {
@@ -360,7 +360,7 @@ impl vfs::INode for INodeImpl {
 
     fn write_at(&self, offset: usize, buf: &[u8]) -> vfs::Result<usize> {
         let type_ = self.disk_inode.read().type_;
-        if type_ != FileType::File && type_ != FileType::SymLink {
+        if type_ != FileType::File && type_ != FileType::SymLink && type_ != FileType::Socket {
             return Err(FsError::NotFile);
         }
         let len = self.file.write_at(buf, offset)?;
@@ -388,7 +388,7 @@ impl vfs::INode for INodeImpl {
             dev: 0,
             inode: self.id,
             size: match disk_inode.type_ {
-                FileType::File | FileType::SymLink => disk_inode.size as usize,
+                FileType::File | FileType::SymLink | FileType::Socket => disk_inode.size as usize,
                 FileType::Dir => disk_inode.blocks as usize,
                 _ => panic!("Unknown file type"),
             },
@@ -487,7 +487,7 @@ impl vfs::INode for INodeImpl {
 
     fn resize(&self, len: usize) -> vfs::Result<()> {
         let type_ = self.disk_inode.read().type_;
-        if type_ != FileType::File && type_ != FileType::SymLink {
+        if type_ != FileType::File && type_ != FileType::SymLink && type_ != FileType::Socket {
             return Err(FsError::NotFile);
         }
         let mut inode = self.disk_inode.write();
@@ -506,6 +506,7 @@ impl vfs::INode for INodeImpl {
             vfs::FileType::File => FileType::File,
             vfs::FileType::Dir => FileType::Dir,
             vfs::FileType::SymLink => FileType::SymLink,
+            vfs::FileType::Socket => FileType::Socket,
             _ => return Err(FsError::InvalidParam),
         };
         let info = self.metadata()?;
@@ -1188,6 +1189,7 @@ impl From<FileType> for vfs::FileType {
             FileType::File => vfs::FileType::File,
             FileType::Dir => vfs::FileType::Dir,
             FileType::SymLink => vfs::FileType::SymLink,
+            FileType::Socket => vfs::FileType::Socket,
             _ => panic!("unknown file type"),
         }
     }
