@@ -385,7 +385,11 @@ impl UnionINodeInner {
     /// If it is a symlink, create a copy of the image symlink.
     pub fn container_inode(&mut self) -> Result<Arc<dyn INode>> {
         let type_ = self.inode().metadata()?.type_;
-        if type_ != FileType::File && type_ != FileType::Dir && type_ != FileType::SymLink {
+        if type_ != FileType::File
+            && type_ != FileType::Dir
+            && type_ != FileType::SymLink
+            && type_ != FileType::Socket
+        {
             return Err(FsError::NotSupported);
         }
         let VirtualINode {
@@ -447,9 +451,8 @@ impl UnionINodeInner {
                         }
                         last_inode = last_file_inode;
                     }
-                    FileType::SymLink => {
-                        let last_link_inode =
-                            last_inode.create(last_inode_name, FileType::SymLink, *mode)?;
+                    FileType::SymLink | FileType::Socket => {
+                        let last_link_inode = last_inode.create(last_inode_name, type_, *mode)?;
                         let data = match self.inode().read_as_vec() {
                             Ok(data) => data,
                             Err(e) => {
