@@ -195,10 +195,8 @@ pub trait INode: Any + Sync + Send {
     /// Read all contents into a vector
     fn read_as_vec(&self) -> Result<Vec<u8>> {
         let size = self.metadata()?.size;
-        let mut buf = Vec::with_capacity(size);
-        unsafe {
-            buf.set_len(size);
-        }
+        let mut buf: Vec<u8> = Vec::with_capacity(size);
+
         self.read_at(0, buf.as_mut_slice())?;
         Ok(buf)
     }
