@@ -11,7 +11,7 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
-        toolchain: nightly-2020-10-25
+        toolchain: nightly-2021-11-01
         override: true
         components: rustfmt, clippy
     - name: Check code format

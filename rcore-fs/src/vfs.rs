@@ -246,7 +246,7 @@ pub struct PollStatus {
 
 /// Metadata of INode
 ///
-/// Ref: [http://pubs.opengroup.org/onlinepubs/009604499/basedefs/sys/stat.h.html]
+/// Ref: <http://pubs.opengroup.org/onlinepubs/009604499/basedefs/sys/stat.h.html>
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Metadata {
     /// Device ID
@@ -309,7 +309,7 @@ pub type FsMac = [u8; FS_MAC_SIZE];
 
 /// Metadata of FileSystem
 ///
-/// Ref: [http://pubs.opengroup.org/onlinepubs/9699919799/]
+/// Ref: <http://pubs.opengroup.org/onlinepubs/9699919799/>
 #[derive(Debug, Default)]
 pub struct FsInfo {
     /// File system type
