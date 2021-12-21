@@ -209,7 +209,10 @@ pub trait INode: Any + Sync + Send {
         let size = self.metadata()?.size;
         let mut buf = vec![0; size];
         let elf64_hdr_size = 64;
-        self.read_at(0, &mut buf.as_mut_slice()[..elf64_hdr_size])?;
+        self.read_at(
+            0,
+            &mut buf.as_mut_slice()[..core::cmp::min(elf64_hdr_size, size)],
+        )?;
         Ok(buf)
     }
 
