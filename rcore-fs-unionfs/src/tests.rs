@@ -252,15 +252,15 @@ fn move_container() -> Result<()> {
 
 #[test]
 fn move_image() -> Result<()> {
-    let (root, croot, _) = create_sample()?;
+    let (root, croot, iroot) = create_sample()?;
 
     let dir = root.lookup("dir")?;
-    root.move_("file3", &dir, "file3")?;
+    dir.move_("file4", &root, "file4")?;
 
-    assert!(root.lookup("file3").is_not_found());
-    assert!(root.lookup("dir/file3").is_ok());
-    assert!(croot.lookup(".wh.file3").is_ok());
-    assert!(croot.lookup("dir/file3").is_ok());
+    assert!(dir.lookup("file4").is_not_found());
+    assert!(root.lookup("file4").is_ok());
+    assert!(croot.lookup("dir/.wh.file4").is_ok());
+    assert!(iroot.lookup("dir/file4").is_ok());
     Ok(())
 }
 
