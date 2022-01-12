@@ -38,7 +38,7 @@ impl TimeProvider for StdTimeProvider {
         let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         Timespec {
             sec: duration.as_secs() as i64,
-            nsec: duration.subsec_nanos() as i32,
+            nsec: duration.subsec_nanos() as i64,
         }
     }
 }

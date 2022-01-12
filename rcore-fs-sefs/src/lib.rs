@@ -395,18 +395,9 @@ impl vfs::INode for INodeImpl {
             mode: disk_inode.mode,
             type_: vfs::FileType::from(disk_inode.type_),
             blocks: disk_inode.blocks as usize,
-            atime: Timespec {
-                sec: disk_inode.atime as i64,
-                nsec: 0,
-            },
-            mtime: Timespec {
-                sec: disk_inode.mtime as i64,
-                nsec: 0,
-            },
-            ctime: Timespec {
-                sec: disk_inode.ctime as i64,
-                nsec: 0,
-            },
+            atime: disk_inode.atime,
+            mtime: disk_inode.mtime,
+            ctime: disk_inode.ctime,
             nlinks: disk_inode.nlinks as usize,
             uid: disk_inode.uid as usize,
             gid: disk_inode.gid as usize,
@@ -420,9 +411,9 @@ impl vfs::INode for INodeImpl {
         disk_inode.mode = metadata.mode;
         disk_inode.uid = metadata.uid as u32;
         disk_inode.gid = metadata.gid as u32;
-        disk_inode.atime = metadata.atime.sec as u32;
-        disk_inode.mtime = metadata.mtime.sec as u32;
-        disk_inode.ctime = metadata.ctime.sec as u32;
+        disk_inode.atime = metadata.atime;
+        disk_inode.mtime = metadata.mtime;
+        disk_inode.ctime = metadata.ctime;
         Ok(())
     }
 
@@ -1077,10 +1068,10 @@ impl SEFS {
     fn new_inode(&self, type_: FileType, mode: u16) -> vfs::Result<Arc<INodeImpl>> {
         let id = self.alloc_block().ok_or(FsError::NoDeviceSpace)?;
         let (time, uuid) = if cfg!(feature = "create_image") && self.device.protect_integrity() {
-            (0, SefsUuid::from(id))
+            (Default::default(), SefsUuid::from(id))
         } else {
             (
-                self.time_provider.current_time().sec as u32,
+                self.time_provider.current_time(),
                 self.uuid_provider.generate_uuid(),
             )
         };

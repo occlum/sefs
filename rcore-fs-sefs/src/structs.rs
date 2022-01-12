@@ -1,12 +1,11 @@
 //! On-disk structures in SEFS
-
+use super::dev::{SefsMac, SefsUuid};
 use alloc::str;
 use core::fmt::{Debug, Error, Formatter};
 use core::mem::{size_of, size_of_val};
 use core::slice;
+use rcore_fs::vfs::Timespec;
 use static_assertions::const_assert;
-
-use super::dev::{SefsMac, SefsUuid};
 
 /// On-disk superblock, 32-bit aligned
 #[repr(C)]
@@ -39,9 +38,9 @@ pub struct DiskINode {
     pub blocks: u32,
     pub uid: u32,
     pub gid: u32,
-    pub atime: u32,
-    pub mtime: u32,
-    pub ctime: u32,
+    pub atime: Timespec,
+    pub mtime: Timespec,
+    pub ctime: Timespec,
     pub disk_filename: SefsUuid,
     pub inode_mac: SefsMac,
 }
