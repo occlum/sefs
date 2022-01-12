@@ -24,13 +24,13 @@ impl VfsFuse {
     fn trans_time(time: vfs::Timespec) -> Timespec {
         Timespec {
             sec: time.sec,
-            nsec: time.nsec,
+            nsec: time.nsec as i32,
         }
     }
     fn trans_time_r(time: Timespec) -> vfs::Timespec {
         vfs::Timespec {
             sec: time.sec,
-            nsec: time.nsec,
+            nsec: time.nsec as i64,
         }
     }
     fn trans_attr(info: vfs::Metadata) -> FileAttr {

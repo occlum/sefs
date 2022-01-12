@@ -28,15 +28,15 @@ impl From<std::fs::Metadata> for Metadata {
             blocks: m.blocks() as usize,
             atime: Timespec {
                 sec: m.atime(),
-                nsec: m.atime_nsec() as i32,
+                nsec: m.atime_nsec(),
             },
             mtime: Timespec {
                 sec: m.mtime(),
-                nsec: m.mtime_nsec() as i32,
+                nsec: m.mtime_nsec(),
             },
             ctime: Timespec {
                 sec: m.ctime(),
-                nsec: m.ctime_nsec() as i32,
+                nsec: m.ctime_nsec(),
             },
             type_: match (m.mode() & 0xf000) as _ {
                 libc::S_IFCHR => FileType::CharDevice,
