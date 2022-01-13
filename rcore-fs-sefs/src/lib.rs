@@ -346,7 +346,7 @@ impl vfs::INode for INodeImpl {
         let len = {
             let size = size as usize;
             let start = size.min(offset);
-            let end = size.min(offset + buf.len());
+            let end = size.min(offset.saturating_add(buf.len()));
             end - start
         };
         let real_len = self.file.read_at(buf, offset)?;
