@@ -37,7 +37,7 @@ pub struct UnionFS {
     /// Weak reference to self
     self_ref: Weak<UnionFS>,
     /// Root INode
-    root_inode: RwLock<Weak<UnionINode>>,
+    root_inode: Option<Arc<UnionINode>>,
     /// Allocate INode ID
     next_inode_id: AtomicUsize,
 }
@@ -49,7 +49,7 @@ pub struct UnionINode {
     /// INode ID
     id: usize,
     /// Reference to `UnionFS`
-    fs: Arc<UnionFS>,
+    fs: Weak<UnionFS>,
     /// Inner
     inner: RwLock<UnionINodeInner>,
     /// Extensions
@@ -153,7 +153,7 @@ impl UnionFS {
         Ok(UnionFS {
             inners: fs,
             self_ref: Weak::default(),
-            root_inode: RwLock::new(Weak::default()),
+            root_inode: None,
             next_inode_id: AtomicUsize::new(ROOT_INODE_ID + 1),
         }
         .wrap())
@@ -166,15 +166,16 @@ impl UnionFS {
         unsafe {
             Arc::get_mut_unchecked(&mut fs).self_ref = Arc::downgrade(&fs);
         }
+        let root_inode = Self::new_root_inode(&fs);
+        unsafe {
+            Arc::get_mut_unchecked(&mut fs).root_inode = Some(root_inode);
+        }
         fs
     }
 
     /// Strong type version of `root_inode`
     pub fn root_inode(&self) -> Arc<UnionINode> {
-        if let Some(root_inode) = self.root_inode.read().upgrade() {
-            return root_inode;
-        }
-        self.new_root_inode()
+        (*self.root_inode.as_ref().unwrap()).clone()
     }
 
     /// Verify the MAC(s) in file with the input FS
@@ -213,9 +214,9 @@ impl UnionFS {
         Ok(())
     }
 
-    /// Create a new root INode
-    fn new_root_inode(&self) -> Arc<UnionINode> {
-        let inners = self
+    /// Create a new root INode, only use in the constructor
+    fn new_root_inode(fs: &Arc<Self>) -> Arc<UnionINode> {
+        let inners = fs
             .inners
             .iter()
             .map(|fs| VirtualINode {
@@ -225,7 +226,7 @@ impl UnionFS {
             .collect();
         let root_inode = Arc::new(UnionINode {
             id: ROOT_INODE_ID,
-            fs: self.self_ref.upgrade().unwrap(),
+            fs: fs.self_ref.clone(),
             inner: RwLock::new(UnionINodeInner {
                 inners,
                 cached_children: EntriesMap::new(),
@@ -238,7 +239,6 @@ impl UnionFS {
         });
         root_inode.inner.write().this = Arc::downgrade(&root_inode);
         root_inode.inner.write().parent = Arc::downgrade(&root_inode);
-        *self.root_inode.write() = Arc::downgrade(&root_inode);
         root_inode
     }
 
@@ -253,7 +253,7 @@ impl UnionFS {
     ) -> Arc<UnionINode> {
         Arc::new(UnionINode {
             id: id.unwrap_or_else(|| self.alloc_inode_id()),
-            fs: self.self_ref.upgrade().unwrap(),
+            fs: self.self_ref.clone(),
             inner: RwLock::new(UnionINodeInner {
                 inners: inodes,
                 cached_children: EntriesMap::new(),
@@ -529,7 +529,7 @@ impl UnionINode {
     /// Helper function to create a child UnionINode, if `id` is provided, use it as
     /// the inode id of the new inode, or just allocate a new one.
     fn new_inode(
-        fs: &Arc<UnionFS>,
+        fs: &Weak<UnionFS>,
         parent_guard: &RwLockWriteGuard<UnionINodeInner>,
         name: &str,
         id: Option<usize>,
@@ -554,6 +554,7 @@ impl UnionINode {
                 }
                 opaque
             };
+            let fs = fs.upgrade().unwrap();
             fs.create_inode(inodes, path_with_mode, opaque, id, ext)
         };
         if new_inode.metadata().unwrap().type_ == FileType::Dir {
@@ -1059,7 +1060,7 @@ impl INode for UnionINode {
     }
 
     fn fs(&self) -> Arc<dyn FileSystem> {
-        self.fs.clone()
+        self.fs.upgrade().unwrap()
     }
 
     fn as_any_ref(&self) -> &dyn Any {

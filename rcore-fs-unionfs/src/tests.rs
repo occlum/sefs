@@ -19,7 +19,7 @@ use std::collections::btree_set::BTreeSet;
 ///     ├── file4
 ///     └── dir2
 ///         └── file5
-fn create_sample() -> Result<(Arc<dyn INode>, Arc<dyn INode>, Arc<dyn INode>)> {
+fn create_sample() -> Result<(Arc<dyn FileSystem>, Arc<dyn INode>, Arc<dyn INode>)> {
     let container_fs = {
         let fs = RamFS::new();
         let root = fs.root_inode();
@@ -49,14 +49,14 @@ fn create_sample() -> Result<(Arc<dyn INode>, Arc<dyn INode>, Arc<dyn INode>)> {
     let image_root = image_fs.root_inode();
 
     let unionfs = UnionFS::new(vec![container_fs, image_fs])?;
-    let union_root = unionfs.root_inode();
 
-    Ok((union_root, container_root, image_root))
+    Ok((unionfs, container_root, image_root))
 }
 
 #[test]
 fn read_file() -> Result<()> {
-    let (root, _, _) = create_sample()?;
+    let (fs, _, _) = create_sample()?;
+    let root = fs.root_inode();
     assert_eq!(root.lookup("file1")?.read_as_vec()?, b"container");
     assert_eq!(root.lookup("file2")?.read_as_vec()?, b"container");
     assert_eq!(root.lookup("file3")?.read_as_vec()?, b"image");
@@ -66,7 +66,8 @@ fn read_file() -> Result<()> {
 
 #[test]
 fn write_file() -> Result<()> {
-    let (root, croot, iroot) = create_sample()?;
+    let (fs, croot, iroot) = create_sample()?;
+    let root = fs.root_inode();
     for path in &["file1", "file3", "dir/file4", "/dir/dir2/file5"] {
         const WRITE_DATA: &[u8] = b"I'm writing to container";
         root.lookup(path)?.write_at(0, WRITE_DATA)?;
@@ -90,7 +91,8 @@ fn write_file() -> Result<()> {
 
 #[test]
 fn get_direntry() -> Result<()> {
-    let (root, _croot, _iroot) = create_sample()?;
+    let (fs, _croot, _iroot) = create_sample()?;
+    let root = fs.root_inode();
     let entries: BTreeSet<String> = root.list()?.into_iter().collect();
     let expected: BTreeSet<String> = [".", "..", "file1", "file2", "file3", "dir"]
         .iter()
@@ -102,7 +104,8 @@ fn get_direntry() -> Result<()> {
 
 #[test]
 fn unlink() -> Result<()> {
-    let (root, croot, iroot) = create_sample()?;
+    let (fs, croot, iroot) = create_sample()?;
+    let root = fs.root_inode();
 
     root.unlink("file1")?;
     assert!(root.lookup("file1").is_not_found());
@@ -145,7 +148,8 @@ fn unlink() -> Result<()> {
 
 #[test]
 fn unlink_then_create() -> Result<()> {
-    let (root, croot, iroot) = create_sample()?;
+    let (fs, croot, iroot) = create_sample()?;
+    let root = fs.root_inode();
     root.unlink("file1")?;
     let file1 = root.create("file1", FileType::File, MODE)?;
     assert_eq!(file1.read_as_vec()?, b"");
@@ -197,7 +201,8 @@ fn unlink_then_create() -> Result<()> {
 
 #[test]
 fn link_container() -> Result<()> {
-    let (root, _, _) = create_sample()?;
+    let (fs, _, _) = create_sample()?;
+    let root = fs.root_inode();
 
     // create link
     let dir = root.lookup("dir")?;
@@ -217,7 +222,8 @@ fn link_container() -> Result<()> {
 
 #[test]
 fn link_image() -> Result<()> {
-    let (root, _, _) = create_sample()?;
+    let (fs, _, _) = create_sample()?;
+    let root = fs.root_inode();
 
     // create link
     let dir = root.lookup("dir")?;
@@ -237,7 +243,8 @@ fn link_image() -> Result<()> {
 
 #[test]
 fn move_container() -> Result<()> {
-    let (root, croot, _) = create_sample()?;
+    let (fs, croot, _) = create_sample()?;
+    let root = fs.root_inode();
 
     let dir = root.lookup("dir")?;
     root.move_("file1", &dir, "file1")?;
@@ -252,7 +259,8 @@ fn move_container() -> Result<()> {
 
 #[test]
 fn move_image() -> Result<()> {
-    let (root, croot, iroot) = create_sample()?;
+    let (fs, croot, iroot) = create_sample()?;
+    let root = fs.root_inode();
 
     let dir = root.lookup("dir")?;
     dir.move_("file4", &root, "file4")?;
