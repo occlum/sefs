@@ -515,7 +515,7 @@ impl<'a> DirentWriterContext<'a> {
 }
 
 /// DirentWriter is used to write directory entry, the object which implements it can decide how to format the data
-pub trait DirentWriter {
+pub trait DirentWriter: Sync + Send {
     fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize>;
 }
 
