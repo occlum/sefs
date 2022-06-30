@@ -110,37 +110,37 @@ fn unlink() -> Result<()> {
     root.unlink("file1")?;
     assert!(root.lookup("file1").is_not_found());
     assert!(croot.lookup("file1").is_not_found());
-    assert!(croot.lookup(".wh.file1").is_ok());
+    assert!(croot.lookup(".ufs.wh.file1").is_ok());
     assert!(iroot.lookup("file1").is_ok());
 
     root.unlink("file2")?;
     assert!(root.lookup("file2").is_not_found());
     assert!(croot.lookup("file2").is_not_found());
-    assert!(croot.lookup(".wh.file2").is_not_found());
+    assert!(croot.lookup(".ufs.wh.file2").is_not_found());
 
     root.unlink("file3")?;
     assert!(root.lookup("file3").is_not_found());
-    assert!(croot.lookup(".wh.file3").is_ok());
+    assert!(croot.lookup(".ufs.wh.file3").is_ok());
     assert!(iroot.lookup("file3").is_ok());
 
     root.lookup("dir")?.unlink("file4")?;
     assert!(root.lookup("dir/file4").is_not_found());
-    assert!(croot.lookup("dir/.wh.file4").is_ok());
+    assert!(croot.lookup("dir/.ufs.wh.file4").is_ok());
     assert!(iroot.lookup("dir/file4").is_ok());
 
     root.lookup("dir")?.lookup("dir2")?.unlink("file5")?;
     assert!(root.lookup("dir/dir2/file5").is_not_found());
-    assert!(croot.lookup("dir/dir2/.wh.file5").is_ok());
+    assert!(croot.lookup("dir/dir2/.ufs.wh.file5").is_ok());
     assert!(iroot.lookup("dir/dir2/file5").is_ok());
 
     root.lookup("dir")?.unlink("dir2")?;
     assert!(root.lookup("dir/dir2").is_not_found());
-    assert!(croot.lookup("dir/.wh.dir2").is_ok());
+    assert!(croot.lookup("dir/.ufs.wh.dir2").is_ok());
     assert!(iroot.lookup("dir/dir2").is_ok());
 
     root.unlink("dir")?;
     assert!(root.lookup("dir").is_not_found());
-    assert!(croot.lookup(".wh.dir").is_ok());
+    assert!(croot.lookup(".ufs.wh.dir").is_ok());
     assert!(iroot.lookup("dir").is_ok());
 
     Ok(())
@@ -153,11 +153,11 @@ fn unlink_then_create() -> Result<()> {
     root.unlink("file1")?;
     let file1 = root.create("file1", FileType::File, MODE)?;
     assert_eq!(file1.read_as_vec()?, b"");
-    assert!(croot.lookup(".wh.file1").is_not_found());
+    assert!(croot.lookup(".ufs.wh.file1").is_not_found());
 
-    assert!(root.create(".wh.file1", FileType::File, MODE).is_err());
-    assert!(root.create(".opaque.file1", FileType::File, MODE).is_err());
-    assert!(root.create(".unionfs.mac", FileType::File, MODE).is_err());
+    assert!(root.create(".ufs.wh.file1", FileType::File, MODE).is_err());
+    assert!(root.create(".ufs.opq.file1", FileType::File, MODE).is_err());
+    assert!(root.create(".ufs.mac", FileType::File, MODE).is_err());
 
     root.unlink("file1")?;
     let file1 = root.create("file1", FileType::Dir, MODE)?;
@@ -177,15 +177,15 @@ fn unlink_then_create() -> Result<()> {
     root.unlink("dir")?;
     let dir = root.create("dir", FileType::Dir, MODE)?;
     assert!(root.lookup("dir").is_ok());
-    assert!(croot.lookup(".wh.dir").is_not_found());
-    assert!(croot.lookup(".opaque.dir").is_ok());
+    assert!(croot.lookup(".ufs.wh.dir").is_not_found());
+    assert!(croot.lookup(".ufs.opq.dir").is_ok());
     assert!(iroot.lookup("dir").is_ok());
     assert!(iroot.lookup("dir")?.list()?.len() == 4);
     assert!(root.lookup("dir")?.list()?.len() == 2);
 
     dir.create("dir2", FileType::Dir, MODE)?;
     assert!(root.lookup("dir/dir2").is_ok());
-    assert!(croot.lookup("dir/.wh.dir2").is_not_found());
+    assert!(croot.lookup("dir/.ufs.wh.dir2").is_not_found());
     assert!(iroot.lookup("dir/dir2").is_ok());
     assert!(root.lookup("dir/dir2")?.list()?.len() == 2);
     assert!(iroot.lookup("dir/dir2")?.list()?.len() == 3);
@@ -193,8 +193,8 @@ fn unlink_then_create() -> Result<()> {
     dir.unlink("dir2")?;
     root.unlink("dir")?;
     assert!(root.lookup("dir").is_not_found());
-    assert!(croot.lookup(".wh.dir").is_ok());
-    assert!(croot.lookup(".opaque.dir").is_not_found());
+    assert!(croot.lookup(".ufs.wh.dir").is_ok());
+    assert!(croot.lookup(".ufs.opq.dir").is_not_found());
 
     Ok(())
 }
@@ -252,7 +252,7 @@ fn move_container() -> Result<()> {
     assert!(root.lookup("file1").is_not_found());
     assert!(root.lookup("dir/file1").is_ok());
     assert!(croot.lookup("file1").is_not_found());
-    assert!(croot.lookup(".wh.file1").is_ok());
+    assert!(croot.lookup(".ufs.wh.file1").is_ok());
     assert!(croot.lookup("dir/file1").is_ok());
     Ok(())
 }
@@ -267,7 +267,7 @@ fn move_image() -> Result<()> {
 
     assert!(dir.lookup("file4").is_not_found());
     assert!(root.lookup("file4").is_ok());
-    assert!(croot.lookup("dir/.wh.file4").is_ok());
+    assert!(croot.lookup("dir/.ufs.wh.file4").is_ok());
     assert!(iroot.lookup("dir/file4").is_ok());
     Ok(())
 }
