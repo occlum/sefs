@@ -135,11 +135,11 @@ struct VirtualINode {
 }
 
 /// the name of MAC file
-const MAC_FILE: &str = ".unionfs.mac";
+const MAC_FILE: &str = ".ufs.mac";
 /// the prefix of whiteout file
-const WH_PREFIX: &str = ".wh.";
+const WH_PREFIX: &str = ".ufs.wh.";
 /// the prefix of opaque file
-const OPAQUE_PREFIX: &str = ".opaque.";
+const OPAQUE_PREFIX: &str = ".ufs.opq.";
 
 impl UnionFS {
     /// Create a `UnionFS` wrapper for file system `fs`
