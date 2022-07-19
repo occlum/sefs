@@ -86,6 +86,7 @@ impl INodeImpl {
     /// Only for Dir
     //TODO: Fix the concurrent problem of dentry operations
     fn get_file_inode_and_entry_id(&self, name: &str) -> vfs::Result<(INodeId, usize)> {
+        let name = if name.is_empty() { "." } else { name };
         for entry_id in 0..self.disk_inode.read().blocks as usize {
             let entry = self.file.read_direntry(entry_id)?;
             if entry.name.as_ref() == name {
@@ -96,11 +97,13 @@ impl INodeImpl {
     }
 
     fn get_file_inode_id(&self, name: &str) -> vfs::Result<INodeId> {
+        let name = if name.is_empty() { "." } else { name };
         self.get_file_inode_and_entry_id(name)
             .map(|(inode_id, _)| inode_id)
     }
 
     fn get_entry_and_entry_id(&self, name: &str) -> vfs::Result<(DiskEntry, usize)> {
+        let name = if name.is_empty() { "." } else { name };
         for entry_id in 0..self.disk_inode.read().blocks as usize {
             let entry = self.file.read_direntry(entry_id)?;
             if entry.name.as_ref() == name {
@@ -558,10 +561,7 @@ impl vfs::INode for INodeImpl {
         if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
-        if name == "." {
-            return Err(FsError::IsDir);
-        }
-        if name == ".." {
+        if name == "." || name == ".." || name.is_empty() {
             return Err(FsError::IsDir);
         }
 
@@ -626,10 +626,10 @@ impl vfs::INode for INodeImpl {
         if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
-        if old_name == "." || old_name == ".." {
+        if old_name == "." || old_name == ".." || old_name.is_empty() {
             return Err(FsError::IsDir);
         }
-        if new_name == "." || new_name == ".." {
+        if new_name == "." || new_name == ".." || new_name.is_empty() {
             return Err(FsError::IsDir);
         }
 

@@ -164,7 +164,7 @@ impl INode for DevRootINode {
 
     fn find(&self, name: &str) -> Result<Arc<dyn INode>> {
         match name {
-            "." | ".." => Ok(self.fs.root_inode()),
+            "" | "." | ".." => Ok(self.fs.root_inode()),
             name => self
                 .fs
                 .devs
