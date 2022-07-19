@@ -196,7 +196,7 @@ impl INode for LockedINode {
         if file.extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if name == "." || name == ".." {
+        if name == "." || name == ".." || name.is_empty() {
             return Err(FsError::EntryExist);
         }
         if file.children.contains_key(name) {
@@ -243,6 +243,9 @@ impl INode for LockedINode {
         if other.extra.type_ == FileType::Dir {
             return Err(FsError::IsDir);
         }
+        if name == "." || name == ".." || name.is_empty() {
+            return Err(FsError::EntryExist);
+        }
         if file.children.contains_key(name) {
             return Err(FsError::EntryExist);
         }
@@ -257,7 +260,7 @@ impl INode for LockedINode {
         if self.0.read().extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        if name == "." || name == ".." {
+        if name == "." || name == ".." || name.is_empty() {
             return Err(FsError::IsDir);
         }
         let other = self.find(name)?;
@@ -275,10 +278,10 @@ impl INode for LockedINode {
     }
 
     fn move_(&self, old_name: &str, target: &Arc<dyn INode>, new_name: &str) -> Result<()> {
-        if old_name == "." || old_name == ".." {
+        if old_name == "." || old_name == ".." || old_name.is_empty() {
             return Err(FsError::IsDir);
         }
-        if new_name == "." || new_name == ".." {
+        if new_name == "." || new_name == ".." || new_name.is_empty() {
             return Err(FsError::IsDir);
         }
         let inode = self.find(old_name)?;
@@ -348,7 +351,7 @@ impl INode for LockedINode {
         }
         //info!("find it: {} {}", name, file.parent.is_none());
         match name {
-            "." => Ok(file.this.upgrade().ok_or(FsError::EntryNotFound)?),
+            "." | "" => Ok(file.this.upgrade().ok_or(FsError::EntryNotFound)?),
             ".." => Ok(file.parent.upgrade().ok_or(FsError::EntryNotFound)?),
             name => {
                 let s = file.children.get(name).ok_or(FsError::EntryNotFound)?;

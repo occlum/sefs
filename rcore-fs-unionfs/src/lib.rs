@@ -1125,7 +1125,7 @@ impl NameExt for str {
     }
 
     fn is_self(&self) -> bool {
-        self == "."
+        self == "." || self.is_empty()
     }
 
     fn is_parent(&self) -> bool {

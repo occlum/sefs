@@ -172,10 +172,10 @@ pub trait INode: Any + Sync + Send {
                 }
                 let mut content = [0u8; PATH_MAX];
                 let len = inode.read_at(0, &mut content)?;
-                let path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
+                let target_path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
                 // result remains unchanged
                 rest_path = {
-                    let mut new_path = String::from(path);
+                    let mut new_path = String::from(target_path);
                     if let Some('/') = new_path.chars().last() {
                         new_path += &rest_path;
                     } else {
@@ -187,6 +187,13 @@ pub trait INode: Any + Sync + Send {
                 follow_times += 1;
             } else {
                 result = inode
+            }
+        }
+
+        // path is a dir but the result is not
+        if let Some('/') = path.chars().last() {
+            if result.metadata()?.type_ != FileType::Dir {
+                return Err(FsError::NotDir);
             }
         }
         Ok(result)
