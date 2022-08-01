@@ -2,7 +2,7 @@
 name = "rcore-fs-devfs"
 version = "0.1.0"
 authors = ["WangRunji <wangrunji0408@163.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 rcore-fs = { path = "../rcore-fs" }

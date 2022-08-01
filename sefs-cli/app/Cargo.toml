@@ -3,7 +3,7 @@ name = "sefs-cli"
 version = "1.0.0"
 authors = ["Antfin"]
 build = "build.rs"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 sgx_types = { path = "../../../rust-sgx-sdk/sgx_types" }

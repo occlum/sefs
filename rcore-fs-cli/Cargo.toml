@@ -2,7 +2,7 @@
 name = "rcore-fs-cli"
 version = "0.1.0"
 authors = ["Runji Wang <wangrunji0408@163.com>"]
-edition = "2018"
+edition = "2021"
 description = "Command line tools to manage rCore file systems."
 
 [features]
