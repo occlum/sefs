@@ -2,7 +2,7 @@
 name = "rcore-fs-ext2"
 version = "0.1.0"
 authors = ["Jiajie Chen <noc@jiegec.ac.cn>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 ext2 = { git = "https://github.com/rcore-os/ext2-rs" }

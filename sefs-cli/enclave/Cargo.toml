@@ -2,7 +2,7 @@
 name = "Sefsclienclave"
 version = "1.0.0"
 authors = ["Antfin"]
-edition = "2018"
+edition = "2021"
 
 [lib]
 name = "sefsclienclave"
