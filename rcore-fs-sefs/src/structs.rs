@@ -75,9 +75,10 @@ impl Debug for Str256 {
 
 impl<'a> From<&'a str> for Str256 {
     fn from(s: &'a str) -> Self {
-        let mut ret = [0u8; 256];
-        ret[0..s.len()].copy_from_slice(s.as_ref());
-        Str256(ret)
+        let mut inner = [0u8; 256];
+        let len = if s.len() > 255 { 255 } else { s.len() };
+        inner[0..len].copy_from_slice(&s.as_bytes()[0..len]);
+        Str256(inner)
     }
 }
 
