@@ -519,6 +519,9 @@ impl vfs::INode for INodeImpl {
         if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
+        }
 
         // Ensure the name is not exist
         if self.get_file_inode_id(name).is_ok() {
@@ -564,6 +567,9 @@ impl vfs::INode for INodeImpl {
         if name == "." || name == ".." || name.is_empty() {
             return Err(FsError::IsDir);
         }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
+        }
 
         let (inode_id, entry_id) = self.get_file_inode_and_entry_id(name)?;
         let inode = self.fs.get_inode(inode_id)?;
@@ -591,6 +597,10 @@ impl vfs::INode for INodeImpl {
         if info.nlinks == 0 {
             return Err(FsError::DirRemoved);
         }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
+        }
+
         if self.get_file_inode_id(name).is_ok() {
             return Err(FsError::EntryExist);
         }
@@ -631,6 +641,9 @@ impl vfs::INode for INodeImpl {
         }
         if new_name == "." || new_name == ".." || new_name.is_empty() {
             return Err(FsError::IsDir);
+        }
+        if old_name.len() > MAX_FNAME_LEN || new_name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
         }
 
         let dest = target
@@ -736,6 +749,9 @@ impl vfs::INode for INodeImpl {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
             return Err(FsError::NotDir);
+        }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
         }
         let inode_id = self.get_file_inode_id(name)?;
         Ok(self.fs.get_inode(inode_id)?)

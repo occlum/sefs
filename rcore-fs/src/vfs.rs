@@ -130,19 +130,15 @@ pub trait INode: Any + Sync + Send {
 
     /// Lookup path from current INode, and follow symlinks at most `max_follow_times` times
     fn lookup_follow(&self, path: &str, max_follow_times: usize) -> Result<Arc<dyn INode>> {
-        if self.metadata()?.type_ != FileType::Dir {
-            return Err(FsError::NotDir);
-        }
-        if path.len() > PATH_MAX {
-            return Err(FsError::NameTooLong);
-        }
-
         let mut follow_times = 0;
         let mut result = self.find(".")?;
         let mut rest_path = String::from(path);
         while !rest_path.is_empty() {
             if result.metadata()?.type_ != FileType::Dir {
                 return Err(FsError::NotDir);
+            }
+            if rest_path.len() > PATH_MAX {
+                return Err(FsError::NameTooLong);
             }
             // handle absolute path
             if let Some('/') = rest_path.chars().next() {
@@ -161,9 +157,6 @@ pub trait INode: Any + Sync + Send {
                     rest_path = String::from(rest_path[pos + 1..].trim_start_matches('/'));
                 }
             };
-            if name.is_empty() {
-                continue;
-            }
             let inode = result.find(&name)?;
             // Handle symlink
             if inode.metadata()?.type_ == FileType::SymLink && max_follow_times > 0 {
