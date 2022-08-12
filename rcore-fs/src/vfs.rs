@@ -123,73 +123,98 @@ pub trait INode: Any + Sync + Send {
             .collect())
     }
 
-    /// Lookup path from current INode, and do not follow symlinks
+    /// Lookup path from current inode.
+    ///
+    /// Do not follow symbolic links.
     fn lookup(&self, path: &str) -> Result<Arc<dyn INode>> {
         self.lookup_follow(path, 0)
     }
 
-    /// Lookup path from current INode, and follow symlinks at most `max_follow_times` times
-    fn lookup_follow(&self, path: &str, max_follow_times: usize) -> Result<Arc<dyn INode>> {
-        let mut follow_times = 0;
-        let mut result = self.find(".")?;
-        let mut rest_path = String::from(path);
-        while !rest_path.is_empty() {
-            if result.metadata()?.type_ != FileType::Dir {
-                return Err(FsError::NotDir);
-            }
-            if rest_path.len() > PATH_MAX {
-                return Err(FsError::NameTooLong);
-            }
-            // handle absolute path
-            if let Some('/') = rest_path.chars().next() {
-                result = self.fs().root_inode();
-                rest_path = String::from(rest_path[1..].trim_start_matches('/'));
-                continue;
-            }
-            let name;
-            match rest_path.find('/') {
-                None => {
-                    name = rest_path;
-                    rest_path = String::new();
-                }
-                Some(pos) => {
-                    name = String::from(&rest_path[0..pos]);
-                    rest_path = String::from(rest_path[pos + 1..].trim_start_matches('/'));
-                }
-            };
-            let inode = result.find(&name)?;
-            // Handle symlink
-            if inode.metadata()?.type_ == FileType::SymLink && max_follow_times > 0 {
-                if follow_times >= max_follow_times {
+    /// Lookup path from current inode.
+    ///
+    /// The current inode must be a directory.
+    ///
+    /// The length of `path` cannot exceed PATH_MAX.
+    /// If `path` ends with `/`, then the returned inode must be a directory inode.
+    ///
+    /// While looking up the inode, symbolic links will be followed for
+    /// at most `max_follows` times, if it is not zero.
+    fn lookup_follow(&self, path: &str, max_follows: usize) -> Result<Arc<dyn INode>> {
+        if self.metadata()?.type_ != FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        if path.len() > PATH_MAX {
+            return Err(FsError::NameTooLong);
+        }
+
+        // To handle symlinks
+        let mut link_path = String::new();
+        let mut follows = 0;
+
+        // Initialize the first inode and the relative path
+        let (mut inode, mut relative_path) = if path.starts_with("/") {
+            (self.fs().root_inode(), path.trim_start_matches('/'))
+        } else {
+            (self.find(".")?, path)
+        };
+
+        while !relative_path.is_empty() {
+            let (next_name, path_remain, must_be_dir) =
+                if let Some((prefix, suffix)) = relative_path.split_once('/') {
+                    let suffix = suffix.trim_start_matches('/');
+                    (prefix, suffix, true)
+                } else {
+                    (relative_path, "", false)
+                };
+
+            // Iterate next inode
+            let next_inode = inode.find(next_name)?;
+            let next_inode_type = next_inode.metadata()?.type_;
+
+            // If next inode is a symlink, follow symlinks at most `max_follows` times.
+            if max_follows > 0 && next_inode_type == FileType::SymLink {
+                if follows >= max_follows {
                     return Err(FsError::SymLoop);
                 }
-                let mut content = [0u8; PATH_MAX];
-                let len = inode.read_at(0, &mut content)?;
-                let target_path = str::from_utf8(&content[..len]).map_err(|_| FsError::NotDir)?;
-                // result remains unchanged
-                rest_path = {
-                    let mut new_path = String::from(target_path);
-                    if let Some('/') = new_path.chars().last() {
-                        new_path += &rest_path;
-                    } else {
-                        new_path += "/";
-                        new_path += &rest_path;
+                let link_path_remain = {
+                    let mut tmp_link_path = {
+                        let mut content = [0u8; PATH_MAX];
+                        let len = next_inode.read_at(0, &mut content)?;
+                        let path_str =
+                            str::from_utf8(&content[..len]).map_err(|_| FsError::EntryNotFound)?;
+                        if path_str.is_empty() {
+                            return Err(FsError::EntryNotFound);
+                        }
+                        String::from(path_str)
+                    };
+                    if !path_remain.is_empty() {
+                        tmp_link_path += "/";
+                        tmp_link_path += path_remain;
+                    } else if must_be_dir {
+                        tmp_link_path += "/";
                     }
-                    new_path
+                    tmp_link_path
                 };
-                follow_times += 1;
+
+                // change the inode and relative path according to symlink
+                if link_path_remain.starts_with("/") {
+                    inode = inode.fs().root_inode();
+                }
+                link_path.clear();
+                link_path.push_str(&link_path_remain.trim_start_matches('/'));
+                relative_path = &link_path;
+                follows += 1;
             } else {
-                result = inode
+                // If path ends with `/`, the inode must be a directory
+                if must_be_dir && next_inode_type != FileType::Dir {
+                    return Err(FsError::NotDir);
+                }
+                inode = next_inode;
+                relative_path = path_remain;
             }
         }
 
-        // path is a dir but the result is not
-        if let Some('/') = path.chars().last() {
-            if result.metadata()?.type_ != FileType::Dir {
-                return Err(FsError::NotDir);
-            }
-        }
-        Ok(result)
+        Ok(inode)
     }
 
     /// Read all contents into a vector
