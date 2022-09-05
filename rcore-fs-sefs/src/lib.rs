@@ -19,7 +19,7 @@ use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
 use rcore_fs::vfs::{
-    self, AllocFlags, DirentWriterContext, FallocateMode, FileSystem, FsError, INode, Timespec,
+    self, AllocFlags, DirentWriterContext, FallocateMode, FileSystem, FsError, INode,
 };
 use spin::{RwLock, RwLockWriteGuard};
 
@@ -1100,6 +1100,7 @@ impl SEFS {
             blocks: 0,
             uid: 0,
             gid: 0,
+            pad: 0,
             atime: time,
             mtime: time,
             ctime: time,
