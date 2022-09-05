@@ -159,6 +159,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
             };
             zip_dir(&dir, sefs_fs.root_inode())?;
+            sefs_fs.sync()?;
             let root_mac_str = {
                 let mut s = String::from("");
                 for (i, byte) in sefs_fs.root_mac().iter().enumerate() {

@@ -21,7 +21,7 @@ pub struct SuperBlock {
     pub groups: u32,
 }
 
-/// On-disk inode, 32-bit aligned
+/// On-disk inode, 64-bit aligned
 #[repr(C)]
 #[derive(Debug)]
 pub struct DiskINode {
@@ -38,6 +38,7 @@ pub struct DiskINode {
     pub blocks: u32,
     pub uid: u32,
     pub gid: u32,
+    pub pad: u32,
     pub atime: Timespec,
     pub mtime: Timespec,
     pub ctime: Timespec,
