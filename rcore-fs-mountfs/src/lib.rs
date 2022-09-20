@@ -66,14 +66,22 @@ impl MountFS {
         }
     }
 
-    /// Strong type version of `root_inode`
-    pub fn mountpoint_root_inode(&self) -> Arc<MNode> {
+    /// The `root_inode` of the mounted FS
+    pub fn mountpoint_root_mnode(&self) -> Arc<MNode> {
         MNode {
             inode: self.inner.root_inode(),
             vfs: self.self_ref.upgrade().unwrap(),
             self_ref: Weak::default(),
         }
         .wrap()
+    }
+
+    /// Strong type version of `root_inode`
+    pub fn root_mnode(&self) -> Arc<MNode> {
+        match &self.self_mountpoint {
+            Some(inode) => inode.vfs.root_mnode(),
+            None => self.mountpoint_root_mnode(),
+        }
     }
 }
 
@@ -142,7 +150,7 @@ impl MNode {
     fn overlaid_inode(&self) -> Arc<MNode> {
         let inode_id = self.metadata().unwrap().inode;
         if let Some(sub_vfs) = self.vfs.mountpoints.read().get(&inode_id) {
-            sub_vfs.mountpoint_root_inode()
+            sub_vfs.mountpoint_root_mnode()
         } else {
             self.self_ref.upgrade().unwrap()
         }
@@ -162,6 +170,21 @@ impl MNode {
             self_ref: Weak::default(),
         }
         .wrap())
+    }
+
+    /// Strong type version of `fs()`
+    pub fn fs(&self) -> Arc<MountFS> {
+        self.vfs.clone()
+    }
+
+    /// Strong type version of `link()`
+    pub fn link(&self, name: &str, other: &Self) -> Result<()> {
+        self.inode.link(name, &other.inode)
+    }
+
+    /// Strong type version of `move_()`
+    pub fn move_(&self, old_name: &str, target: &Self, new_name: &str) -> Result<()> {
+        self.inode.move_(old_name, &target.inode, new_name)
     }
 
     /// Strong type version of `find()`
@@ -240,10 +263,7 @@ impl FileSystem for MountFS {
     }
 
     fn root_inode(&self) -> Arc<dyn INode> {
-        match &self.self_mountpoint {
-            Some(inode) => inode.vfs.root_inode(),
-            None => self.mountpoint_root_inode(),
-        }
+        self.root_mnode()
     }
 
     fn info(&self) -> FsInfo {
@@ -294,11 +314,8 @@ impl INode for MNode {
     }
 
     fn link(&self, name: &str, other: &Arc<dyn INode>) -> Result<()> {
-        let other = &other
-            .downcast_ref::<Self>()
-            .ok_or(FsError::NotSameFs)?
-            .inode;
-        self.inode.link(name, other)
+        let other = &other.downcast_ref::<Self>().ok_or(FsError::NotSameFs)?;
+        self.link(name, other)
     }
 
     fn unlink(&self, name: &str) -> Result<()> {
@@ -311,11 +328,8 @@ impl INode for MNode {
     }
 
     fn move_(&self, old_name: &str, target: &Arc<dyn INode>, new_name: &str) -> Result<()> {
-        let target = &target
-            .downcast_ref::<Self>()
-            .ok_or(FsError::NotSameFs)?
-            .inode;
-        self.inode.move_(old_name, target, new_name)
+        let target = &target.downcast_ref::<Self>().ok_or(FsError::NotSameFs)?;
+        self.move_(old_name, target, new_name)
     }
 
     fn find(&self, name: &str) -> Result<Arc<dyn INode>> {
@@ -339,7 +353,7 @@ impl INode for MNode {
     }
 
     fn fs(&self) -> Arc<dyn FileSystem> {
-        self.vfs.clone()
+        self.fs()
     }
 
     fn as_any_ref(&self) -> &dyn Any {
