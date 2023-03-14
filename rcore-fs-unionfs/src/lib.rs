@@ -1010,15 +1010,13 @@ impl INode for UnionINode {
             return Err(FsError::NotDir);
         }
         let idx = ctx.pos();
-        let mut total_written_len = 0;
-
         if idx == 0 {
             let this_inode = self.inner.read().this.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode);
         }
         if idx <= 1 {
             let parent_inode = self.inner.read().parent.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode);
         }
 
         let mut inner = self.inner.write();
@@ -1048,9 +1046,9 @@ impl INode for UnionINode {
                     }
                 }
             };
-            rcore_fs::write_inode_entry!(&mut ctx, name, inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, name, inode);
         }
-        Ok(total_written_len)
+        Ok(ctx.written_len())
     }
 
     fn ext(&self) -> Option<&Extension> {

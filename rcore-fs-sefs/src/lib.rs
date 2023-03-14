@@ -773,26 +773,21 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::NotDir);
         }
         let idx = ctx.pos();
-        let mut total_written_len = 0;
         for entry_id in idx..self.disk_inode.read().blocks as usize {
             let entry = self.file.read_direntry(entry_id)?;
-            let written_len = match ctx.write_entry(
+            if let Err(e) = ctx.write_entry(
                 entry.name.as_ref(),
                 entry.id as u64,
                 vfs::FileType::from(entry.type_),
             ) {
-                Ok(written_len) => written_len,
-                Err(e) => {
-                    if total_written_len == 0 {
-                        return Err(e);
-                    } else {
-                        break;
-                    }
+                if ctx.written_len() == 0 {
+                    return Err(e);
+                } else {
+                    break;
                 }
             };
-            total_written_len += written_len;
         }
-        Ok(total_written_len)
+        Ok(ctx.written_len())
     }
 
     fn io_control(&self, _cmd: u32, _data: usize) -> vfs::Result<()> {

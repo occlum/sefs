@@ -528,45 +528,44 @@ impl<'a> DirentWriterContext<'a> {
         Self { pos, writer }
     }
 
-    pub fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize> {
-        let written_len = self.writer.write_entry(name, ino, type_)?;
+    pub fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<()> {
+        self.writer.write_entry(name, ino, type_)?;
         self.pos += 1;
-        Ok(written_len)
+        Ok(())
     }
 
     pub fn pos(&self) -> usize {
         self.pos
     }
+
+    pub fn written_len(&self) -> usize {
+        self.writer.written_len()
+    }
 }
 
 /// DirentWriter is used to write directory entry, the object which implements it can decide how to format the data
 pub trait DirentWriter: Sync + Send {
-    fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<usize>;
+    fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<()>;
+    fn written_len(&self) -> usize;
 }
 
 /// Helper macro to write dirent entry of one INode
 #[macro_export]
 macro_rules! write_inode_entry {
-    ($ctx:expr, $name:expr, $inode:expr, $total_written:expr) => {
+    ($ctx:expr, $name:expr, $inode:expr) => {
         let ctx = $ctx;
         let name = $name;
         let inode = $inode;
-        let total_written = $total_written;
 
-        match ctx.write_entry(
+        if let Err(e) = ctx.write_entry(
             name,
             inode.metadata()?.inode as u64,
             inode.metadata()?.type_,
         ) {
-            Ok(written_len) => {
-                *total_written += written_len;
-            }
-            Err(e) => {
-                if *total_written == 0 {
-                    return Err(e);
-                } else {
-                    return Ok(*total_written);
-                }
+            if ctx.written_len() == 0 {
+                return Err(e);
+            } else {
+                return Ok(ctx.written_len());
             }
         }
     };

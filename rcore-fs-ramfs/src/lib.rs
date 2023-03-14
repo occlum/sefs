@@ -383,23 +383,22 @@ impl INode for LockedINode {
         if file.extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let mut total_written_len = 0;
         let idx = ctx.pos();
         // Write the two special entries
         if idx == 0 {
             let this_inode = file.this.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode);
         }
         if idx <= 1 {
             let parent_inode = file.parent.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode);
         }
         // Write the normal entries
         let skipped_children = if idx < 2 { 0 } else { idx - 2 };
         for (name, inode) in file.children.iter().skip(skipped_children) {
-            rcore_fs::write_inode_entry!(&mut ctx, name, inode, &mut total_written_len);
+            rcore_fs::write_inode_entry!(&mut ctx, name, inode);
         }
-        Ok(total_written_len)
+        Ok(ctx.written_len())
     }
 
     fn io_control(&self, _cmd: u32, _data: usize) -> Result<()> {
