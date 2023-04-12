@@ -549,6 +549,16 @@ pub trait DirentWriter: Sync + Send {
     fn written_len(&self) -> usize;
 }
 
+impl DirentWriter for Vec<String> {
+    fn write_entry(&mut self, name: &str, _ino: u64, _type_: FileType) -> Result<()> {
+        self.push(name.into());
+        Ok(())
+    }
+    fn written_len(&self) -> usize {
+        self.len()
+    }
+}
+
 /// Helper macro to write dirent entry of one INode
 #[macro_export]
 macro_rules! write_inode_entry {
