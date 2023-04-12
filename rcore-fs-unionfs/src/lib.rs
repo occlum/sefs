@@ -679,8 +679,7 @@ impl INode for UnionINode {
         if name.is_self() || name.is_parent() {
             return Err(FsError::EntryExist);
         }
-        let mut inner = self.inner.write();
-        if inner.entries().contains_key(name) {
+        if self.inner.write().entries().contains_key(name) {
             return Err(FsError::EntryExist);
         }
         let child = other
@@ -692,6 +691,11 @@ impl INode for UnionINode {
         // ensure 'child' exists in container
         // copy from image on necessary
         let child_inode = child.inner.write().container_inode()?;
+        let mut inner = self.inner.write();
+        // when we got the lock, the name may have been created by another thread
+        if inner.entries().contains_key(name) {
+            return Err(FsError::EntryExist);
+        }
         let this = inner.container_inode()?;
         this.link(name, &child_inode)?;
         // unlink the whiteout file
