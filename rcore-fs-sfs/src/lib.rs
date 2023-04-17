@@ -437,13 +437,6 @@ impl vfs::INode for INodeImpl {
             _ => Err(FsError::NotFile),
         }
     }
-    fn poll(&self) -> vfs::Result<vfs::PollStatus> {
-        Ok(vfs::PollStatus {
-            read: true,
-            write: true,
-            error: false,
-        })
-    }
     /// the size returned here is logical size(entry num for directory), not the disk space used.
     fn metadata(&self) -> vfs::Result<vfs::Metadata> {
         let disk_inode = self.disk_inode.read();

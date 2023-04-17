@@ -107,10 +107,6 @@ impl INode for DevRootINode {
         Err(FsError::IsDir)
     }
 
-    fn poll(&self) -> Result<PollStatus> {
-        Err(FsError::IsDir)
-    }
-
     fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata {
             dev: 0,

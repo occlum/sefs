@@ -17,14 +17,6 @@ impl INode for ZeroINode {
         Ok(buf.len())
     }
 
-    fn poll(&self) -> Result<PollStatus> {
-        Ok(PollStatus {
-            read: true,
-            write: true,
-            error: false,
-        })
-    }
-
     fn metadata(&self) -> Result<Metadata> {
         Ok(Metadata {
             dev: 1,
