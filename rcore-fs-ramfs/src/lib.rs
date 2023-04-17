@@ -137,18 +137,6 @@ impl INode for LockedINode {
         Ok(buf.len())
     }
 
-    fn poll(&self) -> Result<PollStatus> {
-        let file = self.0.read();
-        if file.extra.type_ != FileType::File {
-            return Err(FsError::NotFile);
-        }
-        Ok(PollStatus {
-            read: true,
-            write: true,
-            error: false,
-        })
-    }
-
     fn metadata(&self) -> Result<Metadata> {
         let file = self.0.read();
         let mut metadata = file.extra.clone();

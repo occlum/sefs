@@ -16,7 +16,13 @@ pub trait INode: Any + Sync + Send {
     fn write_at(&self, offset: usize, buf: &[u8]) -> Result<usize>;
 
     /// Poll the events, return a bitmap of events.
-    fn poll(&self) -> Result<PollStatus>;
+    fn poll(&self) -> Result<PollStatus> {
+        Ok(PollStatus {
+            read: true,
+            write: true,
+            error: false,
+        })
+    }
 
     /// Get metadata of the INode
     fn metadata(&self) -> Result<Metadata> {
