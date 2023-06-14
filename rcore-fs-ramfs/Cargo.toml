@@ -7,4 +7,4 @@ edition = "2021"
 [dependencies]
 rcore-fs = { path = "../rcore-fs" }
 spin = "0.5"
-log = "0.4"
+log = "=0.4.17"
