@@ -8,4 +8,4 @@ edition = "2021"
 
 [dependencies]
 rcore-fs = { path = "../rcore-fs", features = ["std"] }
-log = "0.4"
+log = "=0.4.17"
