@@ -65,7 +65,7 @@ struct UnionINodeInner {
     /// Reference to myself
     this: Weak<UnionINode>,
     /// Reference to parent
-    parent: Weak<UnionINode>,
+    parent: Option<Arc<UnionINode>>,
     /// Whether uppper directory occludes lower directory
     opaque: bool,
     /// Merged directory entries.
@@ -89,36 +89,28 @@ impl EntriesMap {
     }
 }
 
-/// Directory entry. It holds the reference to the real INode
-enum Entry {
-    /// A weak reference to the file/symlink INode with inode_id to re-new the INode
-    /// if it is dropped
-    File(Weak<UnionINode>, usize),
-    /// A Strong reference to the dir INode
-    Dir(Arc<UnionINode>),
+/// Directory entry. It holds the weak reference to the real INode
+struct Entry {
+    /// A weak reference to the INode
+    inode: Weak<UnionINode>,
+    /// Inode id to re-new the INode if it is dropped
+    id: usize,
 }
 
 impl Entry {
     fn new(inode: &Arc<UnionINode>) -> Self {
-        if inode.metadata().unwrap().type_ == FileType::Dir {
-            Self::Dir(Arc::clone(inode))
-        } else {
-            Self::File(Arc::downgrade(inode), inode.id)
+        Self {
+            inode: Arc::downgrade(inode),
+            id: inode.id,
         }
     }
 
     fn as_inode(&self) -> Option<Arc<UnionINode>> {
-        match self {
-            Self::Dir(inode) => Some(Arc::clone(inode)),
-            Self::File(weak_inode, _) => weak_inode.upgrade(),
-        }
+        self.inode.upgrade()
     }
 
-    fn id(&self) -> Option<usize> {
-        match self {
-            Self::File(_, id) => Some(*id),
-            _ => None,
-        }
+    fn id(&self) -> usize {
+        self.id
     }
 }
 
@@ -231,14 +223,13 @@ impl UnionFS {
                 inners,
                 cached_children: EntriesMap::new(),
                 this: Weak::default(),
-                parent: Weak::default(),
+                parent: None,
                 path_with_mode: PathWithMode::new(),
                 opaque: false,
             }),
             ext: Extension::new(),
         });
         root_inode.inner.write().this = Arc::downgrade(&root_inode);
-        root_inode.inner.write().parent = Arc::downgrade(&root_inode);
         root_inode
     }
 
@@ -258,7 +249,7 @@ impl UnionFS {
                 inners: inodes,
                 cached_children: EntriesMap::new(),
                 this: Weak::default(),
-                parent: Weak::default(),
+                parent: None,
                 path_with_mode,
                 opaque,
             }),
@@ -562,7 +553,7 @@ impl UnionINode {
         };
         if new_inode.metadata().unwrap().type_ == FileType::Dir {
             new_inode.inner.write().this = Arc::downgrade(&new_inode);
-            new_inode.inner.write().parent = Arc::downgrade(&parent_guard.this.upgrade().unwrap());
+            new_inode.inner.write().parent = parent_guard.this.upgrade();
         }
         new_inode
     }
@@ -968,7 +959,11 @@ impl INode for UnionINode {
         if name.is_self() {
             return Ok(inner.this.upgrade().unwrap());
         } else if name.is_parent() {
-            return Ok(inner.parent.upgrade().unwrap());
+            return Ok(inner
+                .parent
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| inner.this.upgrade().unwrap()));
         }
 
         let entry_op = inner.entries().get(name);
@@ -979,7 +974,7 @@ impl INode for UnionINode {
             if let Some(inode) = entry.as_inode() {
                 return Ok(inode);
             }
-            entry.id()
+            Some(entry.id())
         } else {
             None
         };
@@ -1019,7 +1014,12 @@ impl INode for UnionINode {
             rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode);
         }
         if idx <= 1 {
-            let parent_inode = self.inner.read().parent.upgrade().unwrap();
+            let inner = self.inner.read();
+            let parent_inode = inner
+                .parent
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| inner.this.upgrade().unwrap());
             rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode);
         }
 
@@ -1035,7 +1035,7 @@ impl INode for UnionINode {
             let entry_op = inner.entries().get(name).unwrap();
             let inode = {
                 let (inode_op, reused_id) = if let Some(entry) = entry_op {
-                    (entry.as_inode(), entry.id())
+                    (entry.as_inode(), Some(entry.id()))
                 } else {
                     (None, None)
                 };
