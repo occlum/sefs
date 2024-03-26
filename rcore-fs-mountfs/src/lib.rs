@@ -326,8 +326,8 @@ impl INode for MNode {
         self.inode.get_entry(id)
     }
 
-    fn iterate_entries(&self, ctx: &mut DirentWriterContext) -> Result<usize> {
-        self.inode.iterate_entries(ctx)
+    fn iterate_entries(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize> {
+        self.inode.iterate_entries(offset, visitor)
     }
 
     fn ext(&self) -> Option<&Extension> {
