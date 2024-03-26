@@ -1,5 +1,6 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![deny(warnings)]
+#![cfg_attr(test, allow(unused_imports))]
 #![feature(get_mut_unchecked)]
 #![feature(new_uninit)]
 
@@ -1009,50 +1010,63 @@ impl INode for UnionINode {
         }
     }
 
-    fn iterate_entries(&self, mut ctx: &mut DirentWriterContext) -> Result<usize> {
+    fn iterate_entries(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize> {
         if self.metadata()?.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let idx = ctx.pos();
-        if idx == 0 {
-            let this_inode = self.inner.read().this.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode);
-        }
-        if idx <= 1 {
-            let parent_inode = self.inner.read().parent.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode);
-        }
 
-        let mut inner = self.inner.write();
-        let skipped_children = if idx < 2 { 0 } else { idx - 2 };
-        let keys: Vec<_> = inner
-            .entries()
-            .keys()
-            .skip(skipped_children)
-            .cloned()
-            .collect();
-        for name in keys.iter() {
-            let entry_op = inner.entries().get(name).unwrap();
-            let inode = {
-                let (inode_op, reused_id) = if let Some(entry) = entry_op {
-                    (entry.as_inode(), entry.id())
-                } else {
-                    (None, None)
-                };
-                match inode_op {
-                    Some(inode) => inode,
-                    None => {
-                        let new_inode = Self::new_inode(&self.fs, &inner, name, reused_id, None);
-                        inner
-                            .entries()
-                            .insert(String::from(name), Some(Entry::new(&new_inode)));
-                        new_inode
-                    }
+        let try_iterate =
+            |mut offset: &mut usize, mut visitor: &mut dyn DirentVisitor| -> Result<()> {
+                // The two special entries
+                if *offset == 0 {
+                    let this_inode = self.inner.read().this.upgrade().unwrap();
+                    rcore_fs::visit_inode_entry!(&mut visitor, ".", &this_inode, &mut offset);
                 }
+                if *offset == 1 {
+                    let parent_inode = self.inner.read().parent.upgrade().unwrap();
+                    rcore_fs::visit_inode_entry!(&mut visitor, "..", &parent_inode, &mut offset);
+                }
+
+                // The normal entries
+                let mut inner = self.inner.write();
+                let start_offset = *offset;
+                let keys: Vec<_> = inner
+                    .entries()
+                    .keys()
+                    .skip(start_offset - 2)
+                    .cloned()
+                    .collect();
+                for name in keys.iter() {
+                    let entry_op = inner.entries().get(name).unwrap();
+                    let inode = {
+                        let (inode_op, reused_id) = if let Some(entry) = entry_op {
+                            (entry.as_inode(), entry.id())
+                        } else {
+                            (None, None)
+                        };
+                        match inode_op {
+                            Some(inode) => inode,
+                            None => {
+                                let new_inode =
+                                    Self::new_inode(&self.fs, &inner, name, reused_id, None);
+                                inner
+                                    .entries()
+                                    .insert(String::from(name), Some(Entry::new(&new_inode)));
+                                new_inode
+                            }
+                        }
+                    };
+                    rcore_fs::visit_inode_entry!(&mut visitor, name, inode, &mut offset);
+                }
+
+                Ok(())
             };
-            rcore_fs::write_inode_entry!(&mut ctx, name, inode);
+
+        let mut iterate_offset = offset;
+        match try_iterate(&mut iterate_offset, visitor) {
+            Err(e) if iterate_offset == offset => Err(e),
+            _ => Ok(iterate_offset - offset),
         }
-        Ok(ctx.written_len())
     }
 
     fn ext(&self) -> Option<&Extension> {

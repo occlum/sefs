@@ -1,5 +1,6 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![deny(warnings)]
+#![cfg_attr(test, allow(unused_imports))]
 
 extern crate alloc;
 extern crate log;
@@ -366,27 +367,38 @@ impl INode for LockedINode {
         }
     }
 
-    fn iterate_entries(&self, mut ctx: &mut DirentWriterContext) -> Result<usize> {
+    fn iterate_entries(&self, offset: usize, visitor: &mut dyn DirentVisitor) -> Result<usize> {
         let file = self.0.read();
         if file.extra.type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let idx = ctx.pos();
-        // Write the two special entries
-        if idx == 0 {
-            let this_inode = file.this.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, ".", &this_inode);
+
+        let try_iterate =
+            |mut offset: &mut usize, mut visitor: &mut dyn DirentVisitor| -> Result<()> {
+                // The two special entries
+                if *offset == 0 {
+                    let this_inode = file.this.upgrade().unwrap();
+                    rcore_fs::visit_inode_entry!(&mut visitor, ".", &this_inode, &mut offset);
+                }
+                if *offset == 1 {
+                    let parent_inode = file.parent.upgrade().unwrap();
+                    rcore_fs::visit_inode_entry!(&mut visitor, "..", &parent_inode, &mut offset);
+                }
+
+                // The normal entries
+                let start_offset = *offset;
+                for (name, child) in file.children.iter().skip(start_offset - 2) {
+                    rcore_fs::visit_inode_entry!(&mut visitor, name, child, &mut offset);
+                }
+
+                Ok(())
+            };
+
+        let mut iterate_offset = offset;
+        match try_iterate(&mut iterate_offset, visitor) {
+            Err(e) if iterate_offset == offset => Err(e),
+            _ => Ok(iterate_offset - offset),
         }
-        if idx <= 1 {
-            let parent_inode = file.parent.upgrade().unwrap();
-            rcore_fs::write_inode_entry!(&mut ctx, "..", &parent_inode);
-        }
-        // Write the normal entries
-        let skipped_children = if idx < 2 { 0 } else { idx - 2 };
-        for (name, inode) in file.children.iter().skip(skipped_children) {
-            rcore_fs::write_inode_entry!(&mut ctx, name, inode);
-        }
-        Ok(ctx.written_len())
     }
 
     fn io_control(&self, _cmd: u32, _data: usize) -> Result<()> {

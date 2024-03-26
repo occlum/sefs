@@ -98,7 +98,7 @@ pub trait INode: Any + Sync + Send {
 
     /// Iterate the directory entries
     /// Warn: This function cannot guarantee that iterating an entry only once.
-    fn iterate_entries(&self, _ctx: &mut DirentWriterContext) -> Result<usize> {
+    fn iterate_entries(&self, _offset: usize, _visitor: &mut dyn DirentVisitor) -> Result<usize> {
         Err(FsError::NotSupported)
     }
 
@@ -522,68 +522,54 @@ impl Default for Extension {
 /// The struct which implements the AnyExt trait can be used in Extension
 pub trait AnyExt: Any + Send + Sync {}
 
-/// DirentWriterContext is a wrapper of DirentWriter with directory position
-/// After a successful write, the position increases correspondingly
-pub struct DirentWriterContext<'a> {
-    pos: usize,
-    writer: &'a mut dyn DirentWriter,
+/// DirentVisitor is used to visit directory entry.
+pub trait DirentVisitor: Sync + Send {
+    /// Visits a dir entry.
+    ///
+    /// If the visitor succeeds in visiting the given inode, an `Ok(())` is returned;
+    /// Otherwise, an error is returned.
+    fn visit_entry(&mut self, name: &str, ino: u64, type_: FileType, offset: usize) -> Result<()>;
 }
 
-impl<'a> DirentWriterContext<'a> {
-    pub fn new(pos: usize, writer: &'a mut dyn DirentWriter) -> Self {
-        Self { pos, writer }
-    }
-
-    pub fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<()> {
-        self.writer.write_entry(name, ino, type_)?;
-        self.pos += 1;
-        Ok(())
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
-    pub fn written_len(&self) -> usize {
-        self.writer.written_len()
-    }
-}
-
-/// DirentWriter is used to write directory entry, the object which implements it can decide how to format the data
-pub trait DirentWriter: Sync + Send {
-    fn write_entry(&mut self, name: &str, ino: u64, type_: FileType) -> Result<()>;
-    fn written_len(&self) -> usize;
-}
-
-impl DirentWriter for Vec<String> {
-    fn write_entry(&mut self, name: &str, _ino: u64, _type_: FileType) -> Result<()> {
+impl DirentVisitor for Vec<String> {
+    fn visit_entry(
+        &mut self,
+        name: &str,
+        _ino: u64,
+        _type_: FileType,
+        _offset: usize,
+    ) -> Result<()> {
         self.push(name.into());
         Ok(())
     }
-    fn written_len(&self) -> usize {
-        self.len()
-    }
 }
 
-/// Helper macro to write dirent entry of one INode
+/// Helper macro to write dir entry
 #[macro_export]
-macro_rules! write_inode_entry {
-    ($ctx:expr, $name:expr, $inode:expr) => {
-        let ctx = $ctx;
+macro_rules! visit_entry {
+    ($visitor:expr, $name:expr, $ino:expr, $type_:expr, $offset:expr) => {
+        let visitor = $visitor;
         let name = $name;
-        let inode = $inode;
+        let ino = $ino;
+        let type_ = $type_;
+        let offset = $offset;
 
-        if let Err(e) = ctx.write_entry(
-            name,
-            inode.metadata()?.inode as u64,
-            inode.metadata()?.type_,
-        ) {
-            if ctx.written_len() == 0 {
-                return Err(e);
-            } else {
-                return Ok(ctx.written_len());
-            }
-        }
+        visitor.visit_entry(name, ino as u64, type_, **offset)?;
+        **offset += 1;
+    };
+}
+
+#[macro_export]
+macro_rules! visit_inode_entry {
+    ($visitor:expr, $name:expr, $inode:expr, $offset: expr) => {
+        let visitor = $visitor;
+        let name = $name;
+        let ino = $inode.metadata()?.inode;
+        let type_ = $inode.metadata()?.type_;
+        let offset = $offset;
+
+        visitor.visit_entry(name, ino as u64, type_, **offset)?;
+        **offset += 1;
     };
 }
 

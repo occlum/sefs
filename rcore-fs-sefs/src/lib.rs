@@ -18,9 +18,7 @@ use core::ops::Range;
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{
-    self, AllocFlags, DirentWriterContext, FallocateMode, FileSystem, FsError, INode,
-};
+use rcore_fs::vfs::{self, AllocFlags, DirentVisitor, FallocateMode, FileSystem, FsError, INode};
 use spin::{RwLock, RwLockWriteGuard};
 
 use self::dev::*;
@@ -760,26 +758,37 @@ impl vfs::INode for INodeImpl {
         Ok(String::from(entry.name.as_ref()))
     }
 
-    fn iterate_entries(&self, ctx: &mut DirentWriterContext) -> vfs::Result<usize> {
+    fn iterate_entries(
+        &self,
+        offset: usize,
+        visitor: &mut dyn DirentVisitor,
+    ) -> vfs::Result<usize> {
         if self.disk_inode.read().type_ != FileType::Dir {
             return Err(FsError::NotDir);
         }
-        let idx = ctx.pos();
-        for entry_id in idx..self.disk_inode.read().blocks as usize {
-            let entry = self.file.read_direntry(entry_id)?;
-            if let Err(e) = ctx.write_entry(
-                entry.name.as_ref(),
-                entry.id as u64,
-                vfs::FileType::from(entry.type_),
-            ) {
-                if ctx.written_len() == 0 {
-                    return Err(e);
-                } else {
-                    break;
+
+        let try_iterate =
+            |offset: &mut usize, visitor: &mut dyn DirentVisitor| -> vfs::Result<()> {
+                let start_offset = *offset;
+                for entry_id in start_offset..self.disk_inode.read().blocks as usize {
+                    let entry = self.file.read_direntry(entry_id)?;
+                    visitor.visit_entry(
+                        entry.name.as_ref(),
+                        entry.id as u64,
+                        vfs::FileType::from(entry.type_),
+                        entry_id,
+                    )?;
+                    *offset += 1;
                 }
+
+                Ok(())
             };
+
+        let mut iterate_offset = offset;
+        match try_iterate(&mut iterate_offset, visitor) {
+            Err(e) if iterate_offset == offset => Err(e),
+            _ => Ok(iterate_offset - offset),
         }
-        Ok(ctx.written_len())
     }
 
     fn io_control(&self, _cmd: u32, _data: usize) -> vfs::Result<()> {
