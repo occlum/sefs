@@ -5,10 +5,8 @@
 extern crate alloc;
 use alloc::{
     boxed::Box,
-    collections::BTreeMap,
     string::{String, ToString},
     sync::{Arc, Weak},
-    vec::Vec,
 };
 use core::any::Any;
 use core::fmt::{Debug, Error, Formatter};
@@ -24,9 +22,14 @@ use spin::{RwLock, RwLockWriteGuard};
 use self::dev::*;
 pub use self::structs::SEFS_MAGIC;
 use self::structs::*;
+use log::{info, debug};
 
 pub mod dev;
 mod structs;
+
+extern crate lru;
+use core::num::NonZeroUsize;
+use lru::LruCache;
 
 /// Helper methods for `File`
 impl dyn File {
@@ -829,6 +832,12 @@ impl Drop for INodeImpl {
     }
 }
 
+// SEFS `inodes` cache is at the lowest level of the trusted world. The cache entry dropped here
+// will lead to the file close on the host filesystem.
+// The `inodes` cache use an unbounded LRU implementation. And the cache will try to evict the LRU entry when
+// the watermark is reached and the specific condition is met.
+const SEFS_INODE_CACHE_WATERMARK: usize = 5;
+
 /// Simple Encrypted File System
 // Be careful with the write lock sequence of super_block, free_map and inodes
 // Since free_map and super_block are always used simultaneously,
@@ -839,7 +848,8 @@ pub struct SEFS {
     /// blocks in use are marked 0
     free_map: RwLock<Dirty<BitVec<Lsb0, u8>>>,
     /// inode list
-    inodes: RwLock<BTreeMap<INodeId, Weak<INodeImpl>>>,
+    /// TODO: Use mutex to replace RwLock
+    inodes: RwLock<LruCache<INodeId, Arc<INodeImpl>>>,
     /// device
     device: Box<dyn Storage>,
     /// metadata file
@@ -892,7 +902,9 @@ impl SEFS {
         Ok(SEFS {
             super_block: RwLock::new(Dirty::new(super_block)),
             free_map: RwLock::new(Dirty::new(free_map)),
-            inodes: RwLock::new(BTreeMap::new()),
+            inodes: RwLock::new(LruCache::unbounded(Some(
+                NonZeroUsize::new(SEFS_INODE_CACHE_WATERMARK).unwrap(),
+            ))),
             device,
             meta_file,
             time_provider,
@@ -932,7 +944,9 @@ impl SEFS {
         let sefs = SEFS {
             super_block: RwLock::new(Dirty::new_dirty(super_block)),
             free_map: RwLock::new(Dirty::new_dirty(free_map)),
-            inodes: RwLock::new(BTreeMap::new()),
+            inodes: RwLock::new(LruCache::unbounded(Some(
+                NonZeroUsize::new(SEFS_INODE_CACHE_WATERMARK).unwrap(),
+            ))),
             device,
             meta_file,
             time_provider,
@@ -1043,6 +1057,12 @@ impl SEFS {
         create: bool,
     ) -> vfs::Result<Arc<INodeImpl>> {
         let filename = disk_inode.disk_filename.to_string();
+        let mut inode_cache = self.inodes.write();
+
+        // Try to get cache again while holding the lock to prevent race conditions
+        if let Some(inode) = inode_cache.get(&id) {
+            return Ok(inode.clone());
+        }
 
         let inode = Arc::new(INodeImpl {
             id,
@@ -1057,7 +1077,17 @@ impl SEFS {
         if let false = create {
             inode.check_integrity()
         }
-        self.inodes.write().insert(id, Arc::downgrade(&inode));
+
+        // Define evict inode condition: inode is only recorded in the inodes cache
+        let evict_when_true = |inode: &Arc<INodeImpl>| -> bool {
+            let strong_count = Arc::strong_count(&inode);
+            strong_count == 1
+        };
+
+        // Drop the evict inode while holding the inodes lock
+        let ret = inode_cache.push_and_evict_with_cond(id, inode.clone(), evict_when_true);
+        core::mem::drop(ret);
+
         Ok(inode)
     }
 
@@ -1066,13 +1096,12 @@ impl SEFS {
     fn get_inode(&self, id: INodeId) -> vfs::Result<Arc<INodeImpl>> {
         assert!(!self.free_map.read()[id]);
 
-        // In the BTreeSet and not weak.
-        if let Some(inode) = self.inodes.read().get(&id) {
-            if let Some(inode) = inode.upgrade() {
-                return Ok(inode);
-            }
+        // In the cache
+        if let Some(inode) = self.inodes.write().get(&id) {
+            return Ok(inode.clone());
         }
-        // Load if not in set, or is weak ref.
+
+        // Load if not cached
         let disk_inode = Dirty::new(self.meta_file.load_struct::<DiskINode>(id)?);
         self._new_inode(id, disk_inode, false)
     }
@@ -1106,18 +1135,6 @@ impl SEFS {
         self._new_inode(id, disk_inode, true)
     }
 
-    fn flush_weak_inodes(&self) {
-        let mut inodes = self.inodes.write();
-        let remove_ids: Vec<_> = inodes
-            .iter()
-            .filter(|(_, inode)| inode.upgrade().is_none())
-            .map(|(&id, _)| id)
-            .collect();
-        for id in remove_ids.iter() {
-            inodes.remove(id);
-        }
-    }
-
     fn get_freemap_block_id_of_group(group_id: usize) -> usize {
         BLKBITS * group_id + BLKN_FREEMAP
     }
@@ -1126,13 +1143,9 @@ impl SEFS {
 impl vfs::FileSystem for SEFS {
     /// Write back FS if dirty
     fn sync(&self) -> vfs::Result<()> {
-        // Sync all INodes
-        self.flush_weak_inodes();
-        for inode in self.inodes.read().values() {
-            if let Some(inode) = inode.upgrade() {
-                inode.sync_all()?;
-            }
-        }
+        // Clear cache to sync all inodes, inode auto sync when drop
+        self.inodes.write().clear();
+
         // Sync metadata
         self.sync_metadata()?;
         Ok(())
