@@ -16,10 +16,11 @@ fn main() {
 
     match is_sim.as_ref() {
         "SW" | "SIM" => {
-            println!("cargo:rustc-link-arg=-lsgx_urts_sim_with_se_event");
+            println!("cargo:rustc-link-arg=-Wl,-Bstatic");
+            println!("cargo:rustc-link-arg=-lsgx_urts_sim");
             println!("cargo:rustc-link-arg=-Wl,-Bdynamic");
             println!("cargo:rustc-link-arg=-lsgx_uae_service_sim");
-            // Needed by sgx_urts_sim_with_se_event static library
+            // Needed by sgx_urts_sim static library
             println!("cargo:rustc-link-arg=-lcrypto");
             // Must link with C++ dynamic library
             println!("cargo:rustc-link-arg=-lstdc++");
