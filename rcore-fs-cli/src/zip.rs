@@ -11,10 +11,12 @@ use std::sync::Arc;
 
 use rcore_fs::vfs::{FileType, INode, PATH_MAX};
 
+use crate::thread_pool;
+
 const BUF_SIZE: usize = 0x10000;
 const S_IMASK: u32 = 0o777;
 
-pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
+pub fn zip_dir(path: &Path, inode: Arc<dyn INode>, thread_pool: &thread_pool::Pool) -> Result<(), Box<dyn Error>> {
     let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.map(|dir| dir.unwrap()).collect();
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
@@ -26,19 +28,22 @@ pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>>
         //println!("zip: name: {:?}, mode: {:#o}", entry.path(), mode);
         if type_.is_file() {
             let inode = inode.create(name, FileType::File, mode)?;
-            let mut file = fs::File::open(entry.path())?;
-            inode.resize(file.metadata()?.len() as usize)?;
-            let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
-            let mut offset = 0usize;
-            let mut len = BUF_SIZE;
-            while len == BUF_SIZE {
-                len = file.read(buf.as_mut())?;
-                inode.write_at(offset, &buf[..len])?;
-                offset += len;
-            }
+            // copy file content in another thread
+            thread_pool.execute(move ||{
+                let mut file = fs::File::open(entry.path()).unwrap();
+                inode.resize(file.metadata().unwrap().len() as usize).expect(format!("resize {} failed", entry.path().display()).as_str());
+                let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
+                let mut offset = 0usize;
+                let mut len = BUF_SIZE;
+                while len == BUF_SIZE {
+                    len = file.read(buf.as_mut()).unwrap();
+                    inode.write_at(offset, &buf[..len]).expect(format!("write {} failed", entry.path().display()).as_str());
+                    offset += len;
+                };
+            });
         } else if type_.is_dir() {
             let inode = inode.create(name, FileType::Dir, mode)?;
-            zip_dir(entry.path().as_path(), inode)?;
+            zip_dir(entry.path().as_path(), inode, thread_pool)?;
         } else if type_.is_symlink() {
             let target = fs::read_link(entry.path())?;
             let inode = inode.create(name, FileType::SymLink, mode)?;

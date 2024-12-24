@@ -4,6 +4,7 @@ use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use rcore_fs_cli::thread_pool::Pool;
 use structopt::StructOpt;
 
 use rcore_fs::dev::std_impl::StdTimeProvider;
@@ -38,6 +39,10 @@ enum Opt {
         /// File system: [sfs | sefs | hostfs]
         #[structopt(short = "f", long = "fs", default_value = "sfs")]
         fs: String,
+
+        /// Number of threads
+        #[structopt(short="j", long, default_value="4")]
+        thread_num: usize,
     },
 
     /// Extract files from a fs image.
@@ -86,9 +91,10 @@ fn main() {
     let opt = Opt::from_args();
 
     match opt {
-        Opt::Zip { dir, image, fs } => {
+        Opt::Zip { dir, image, fs , thread_num} => {
             let fs = open_fs(&fs, &image, true);
-            zip_dir(&dir, fs.root_inode()).expect("failed to zip fs");
+            let thread_pool = Pool::new(thread_num);
+            zip_dir(&dir, fs.root_inode(), &thread_pool).expect("failed to zip fs");
         }
         Opt::Unzip { dir, image, fs } => {
             let fs = open_fs(&fs, &image, false);
