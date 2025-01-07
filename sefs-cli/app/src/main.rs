@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::Arc;
 
 use ctrlc;
 use libc;
@@ -21,6 +22,7 @@ use rcore_fs_unionfs as unionfs;
 
 mod enclave;
 mod sgx_dev;
+mod cache_dev;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -155,16 +157,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             mac,
             key,
         } => {
-            let sefs_fs = {
-                std::fs::create_dir(&image)?;
-                let key = parse_key(&key)?;
-                let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
-                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
-            };
+            std::fs::create_dir(&image)?;
+            let key = parse_key(&key)?;
+            let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
+            let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+            let cache_device = cache_dev::CacheStorage::new(Arc::new(Box::new(device)));
+            let sefs_fs = sefs::SEFS::create(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?;
+
             let thread_pool = Pool::new(opt.thread_num);
             zip_dir(&dir, sefs_fs.root_inode(), &thread_pool)?;
             sefs_fs.sync()?;
+            cache_device.write_cache_to_inner().unwrap();
             let root_mac_str = {
                 let mut s = String::from("");
                 for (i, byte) in sefs_fs.root_mac().iter().enumerate() {
