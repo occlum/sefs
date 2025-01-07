@@ -22,3 +22,5 @@ rcore-fs-sefs = { path = "../rcore-fs-sefs", features = ["std"] }
 rcore-fs-ramfs = { path = "../rcore-fs-ramfs" }
 rcore-fs-hostfs = { path = "../rcore-fs-hostfs" }
 rcore-fs-unionfs = { path = "../rcore-fs-unionfs" }
+threadpool = "1.8"
+num_cpus = "1.13"
