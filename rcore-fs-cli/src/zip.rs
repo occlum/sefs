@@ -16,9 +16,17 @@ use crate::thread_pool;
 const BUF_SIZE: usize = 0x10000;
 const S_IMASK: u32 = 0o777;
 
-pub fn zip_dir(path: &Path, inode: Arc<dyn INode>, thread_pool: &thread_pool::Pool) -> Result<(), Box<dyn Error>> {
+pub fn zip_dir(path: &Path, inode: Arc<dyn INode>, thread_pool: &thread_pool::Pool, image_time: Option<i64>) -> Result<(), Box<dyn Error>> {
     let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.map(|dir| dir.unwrap()).collect();
     entries.sort_by_key(|entry| entry.file_name());
+    let is_incremental = image_time.is_some();
+    let mut deleted_files: Vec<String> = Vec::new();
+    if is_incremental {
+        // at first, we record all the files in the image, 
+        // existing files would be remove from the lsit later
+        deleted_files = inode.list()?;
+        let _ = deleted_files.drain(0..2);
+    }
     for entry in entries {
         let name_ = entry.file_name();
         let name = name_.to_str().unwrap();
@@ -26,8 +34,34 @@ pub fn zip_dir(path: &Path, inode: Arc<dyn INode>, thread_pool: &thread_pool::Po
         let type_ = metadata.file_type();
         let mode = (metadata.permissions().mode() & S_IMASK) as u16;
         //println!("zip: name: {:?}, mode: {:#o}", entry.path(), mode);
+        if is_incremental {
+            // if a file still exists, remove it from deleted_files
+            // we use a linear search here, because `inode.list()` should have 
+            // same order with `entries`. we break at the first match, 
+            // it would not cause a large overhead.
+            for (index, image_node_name) in deleted_files.iter().enumerate() {
+                if image_node_name == name {
+                    deleted_files.remove(index);
+                    break;
+                }
+            }
+            // skip the file not modified after image is created
+            if !type_.is_dir() {
+                if let Some(last_modify) = image_time {
+                    use std::os::linux::fs::MetadataExt;
+                    if metadata.st_ctime() < last_modify {
+                        continue;
+                    }
+                    println!("{} needs to be updated", name);
+                }
+            }
+        }
         if type_.is_file() {
-            let inode = inode.create(name, FileType::File, mode)?;
+            let inode = if !is_incremental {
+                inode.create(name, FileType::File, mode)?
+            } else {
+                inode.find(name).or(inode.create(name, FileType::File, mode))?
+            };
             // copy file content in another thread
             thread_pool.execute(move ||{
                 let mut file = fs::File::open(entry.path()).unwrap();
@@ -42,15 +76,28 @@ pub fn zip_dir(path: &Path, inode: Arc<dyn INode>, thread_pool: &thread_pool::Po
                 };
             });
         } else if type_.is_dir() {
-            let inode = inode.create(name, FileType::Dir, mode)?;
-            zip_dir(entry.path().as_path(), inode, thread_pool)?;
+            let inode = if !is_incremental {
+                inode.create(name, FileType::Dir, mode)?
+            } else {
+                inode.find(name).or(inode.create(name, FileType::Dir, mode))?
+            };
+            zip_dir(entry.path().as_path(), inode, thread_pool, image_time)?;
         } else if type_.is_symlink() {
             let target = fs::read_link(entry.path())?;
-            let inode = inode.create(name, FileType::SymLink, mode)?;
+            let inode = if !is_incremental {
+                inode.create(name, FileType::SymLink, mode)?
+            } else {
+                inode.find(name).or(inode.create(name, FileType::SymLink, mode))?
+            };
             let data = target.as_os_str().as_bytes();
             inode.resize(data.len())?;
             inode.write_at(0, data)?;
         }
+    }
+    // Delete files that are not in the source directory
+    for file_name in deleted_files {
+        inode.unlink(&file_name).unwrap();
+        println!("{} deleted", file_name);
     }
     Ok(())
 }

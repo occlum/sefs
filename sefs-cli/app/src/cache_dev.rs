@@ -142,12 +142,7 @@ impl CacheStorage {
 
 impl Storage for CacheStorage {
     fn open(&self, file_id: &str) -> DevResult<Box<dyn File>> {
-        let file = if file_id.eq("metadata") {
-            return Err(DevError(114));
-        } else {
-            self.inner_storage.open(file_id)?
-        };
-        Ok(file)
+        Ok(self.inner_storage.open(file_id)?)
     }
 
     fn create(&self, file_id: &str) -> DevResult<Box<dyn File>> {

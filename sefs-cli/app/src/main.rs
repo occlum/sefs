@@ -54,6 +54,9 @@ enum Cmd {
         /// Key for encryption
         #[structopt(short, long, parse(from_os_str))]
         key: Option<PathBuf>,
+        /// Incremental Zip
+        #[structopt(short="i", long)]
+        incremental: bool,
     },
     /// Unzip data from given <image> to <dir>
     #[structopt(name = "unzip")]
@@ -156,16 +159,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             image,
             mac,
             key,
+            incremental
         } => {
-            std::fs::create_dir(&image)?;
+            if !incremental {
+                std::fs::create_dir(&image)?;
+            }
             let key = parse_key(&key)?;
             let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
             let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
             let cache_device = cache_dev::CacheStorage::new(Arc::new(Box::new(device)));
-            let sefs_fs = sefs::SEFS::create(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?;
-
+            let sefs_fs = if incremental {
+                sefs::SEFS::open(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?
+            } else {
+                sefs::SEFS::create(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?
+            };
+            let image_last_modified_time = if incremental {
+                let mut metadata_path: PathBuf = PathBuf::from(image);
+                metadata_path.push("metadata");
+                let metadata = std::fs::metadata(metadata_path)?;
+                use std::os::linux::fs::MetadataExt;
+                Some(metadata.st_ctime())
+            } else {
+                None
+            };
             let thread_pool = Pool::new(opt.thread_num);
-            zip_dir(&dir, sefs_fs.root_inode(), &thread_pool)?;
+            zip_dir(&dir, sefs_fs.root_inode(), &thread_pool, image_last_modified_time)?;
             sefs_fs.sync()?;
             cache_device.write_cache_to_inner().unwrap();
             let root_mac_str = {
