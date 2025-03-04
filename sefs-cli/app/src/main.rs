@@ -169,6 +169,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let key = parse_key(&key)?;
             let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
             let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+            // Wrap the inner storage with CacheStorage, cache the metadata in 
+            // memory before the zipping process is completed
             let cache_device = cache_dev::CacheStorage::new(Arc::new(Box::new(device)));
             let sefs_fs = if incremental {
                 sefs::SEFS::open(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?
