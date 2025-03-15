@@ -3,6 +3,8 @@
 
 #[macro_use]
 extern crate alloc;
+//
+
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
@@ -27,6 +29,7 @@ use self::structs::*;
 
 pub mod dev;
 mod structs;
+
 
 /// Helper methods for `File`
 impl dyn File {
@@ -103,7 +106,7 @@ impl INodeImpl {
     fn get_entry_and_entry_id(&self, name: &str) -> vfs::Result<(DiskEntry, usize)> {
         let name = if name.is_empty() { "." } else { name };
         for entry_id in 0..self.disk_inode.read().blocks as usize {
-            let entry = self.file.read_direntry(entry_id)?;
+            let entry = self.file.read_direntry(entry_id)?;     
             if entry.name.as_ref() == name {
                 return Ok((entry, entry_id));
             }
@@ -183,8 +186,7 @@ impl INodeImpl {
     pub fn update_mac(&self) -> vfs::Result<()> {
         if self.fs.device.protect_integrity() {
             self.disk_inode.write().inode_mac = self.file.get_file_mac().unwrap();
-            //println!("file_mac {:?}", self.disk_inode.read().inode_mac);
-            self.sync_all()?;
+            self.sync_part()?;
         }
         Ok(())
     }
@@ -210,6 +212,33 @@ impl INodeImpl {
             disk_inode.sync();
         }
         self.fs.meta_file.flush()?;
+        Ok(())
+    }
+    /// Write the Inode's info into metadata cache, seperate the code into two parts to avoid dead lock
+    #[cfg(feature = "create_image")]
+    fn sync_metadata_cache(&self) -> vfs::Result<()> {
+        let need_sync;
+        let buffer = {
+            let disk_inode = self.disk_inode.read();
+            need_sync = disk_inode.dirty();
+            if !need_sync {
+                return Ok(());
+            }
+            let mut buffer = [0u8; 128];
+            buffer[..disk_inode.as_buf().len()].copy_from_slice(&disk_inode.as_buf());
+            buffer
+        };
+        {
+            let mut meta_data_cache = self.fs.meta_data_cache.write();
+            meta_data_cache[self.id].copy_from_slice(&buffer);
+        }
+        {
+            let mut disk_inode = self.disk_inode.write();
+            if disk_inode.dirty() {
+                disk_inode.sync();
+            }
+        }
+        
         Ok(())
     }
 
@@ -336,6 +365,15 @@ impl INodeImpl {
         }
         Ok(())
     }
+    /// Sync file data and metadata cache of the INode
+    #[cfg(feature = "create_image")]
+    fn sync_part(&self) -> vfs::Result<()> {
+        // Sync data
+        self.sync_data()?;
+        // Sync metadata
+        self.sync_metadata_cache()?;
+        Ok(())
+    }
 }
 
 impl vfs::INode for INodeImpl {
@@ -420,7 +458,7 @@ impl vfs::INode for INodeImpl {
     }
 
     fn sync_data(&self) -> vfs::Result<()> {
-        self.file.flush()?;
+    self.file.flush()?;
         Ok(())
     }
 
@@ -495,6 +533,7 @@ impl vfs::INode for INodeImpl {
         type_: vfs::FileType,
         mode: u16,
     ) -> vfs::Result<Arc<dyn vfs::INode>> {
+
         let type_ = match type_ {
             vfs::FileType::File => FileType::File,
             vfs::FileType::Dir => FileType::Dir,
@@ -513,16 +552,20 @@ impl vfs::INode for INodeImpl {
             return Err(FsError::NameTooLong);
         }
 
-        // Ensure the name is not exist
+        
+        #[cfg(not(feature = "create_image"))]{
         if self.get_file_inode_id(name).is_ok() {
             return Err(FsError::EntryExist);
         }
-
+        }
+        
         // Create a new INode
         let inode = self.fs.new_inode(type_, mode)?;
+
         if type_ == FileType::Dir {
             inode.dirent_init(self.id)?;
         }
+
         // Insert it into dir entry
         let entry = DiskEntry {
             id: inode.id as u32,
@@ -536,13 +579,13 @@ impl vfs::INode for INodeImpl {
             inode.nlinks_inc(); //for .
             self.nlinks_inc(); //for ..
         }
-        // Update metadata file to make the INode valid
-        self.fs.sync_metadata()?;
-        inode.sync_all()?;
-        // Sync the dirINode's info into file
-        // MUST sync the INode's info first, or the entry maybe invalid
-        self.sync_all()?;
-
+        // When creating an image, synchronization from cache to disk is not needed for every operation
+        #[cfg(not(feature = "create_image"))]{
+            self.fs.sync_metadata()?;
+            inode.sync_all()?;
+            self.sync_all()?;
+        }
+    
         Ok(inode)
     }
 
@@ -806,10 +849,15 @@ impl vfs::INode for INodeImpl {
 impl Drop for INodeImpl {
     /// Auto sync when drop
     fn drop(&mut self) {
-        #[cfg(feature = "create_image")]
-        self.update_mac()
-            .expect("failed to update mac when dropping the SEFS Inode");
 
+        #[cfg(feature = "create_image")]{
+            self.update_mac()
+            .expect("failed to update mac when dropping the SEFS Inode");
+            self.sync_part()
+            .expect("failed to sync data when dropping the SEFS Inode");
+
+        }
+        #[cfg(not(feature = "create_image"))]
         self.sync_all()
             .expect("failed to sync when dropping the SEFS Inode");
         if self.disk_inode.read().nlinks == 0 {
@@ -838,6 +886,8 @@ pub struct SEFS {
     super_block: RwLock<Dirty<SuperBlock>>,
     /// blocks in use are marked 0
     free_map: RwLock<Dirty<BitVec<Lsb0, u8>>>,
+    /// metadata cache
+    meta_data_cache: RwLock<Dirty<Vec<[u8; BLKSIZE]>>>,
     /// inode list
     inodes: RwLock<BTreeMap<INodeId, Weak<INodeImpl>>>,
     /// device
@@ -888,18 +938,23 @@ impl SEFS {
                 &mut free_map.as_mut_slice()[BLKSIZE * i..BLKSIZE * (i + 1)],
             )?;
         }
-
-        Ok(SEFS {
+        let blocks = super_block.blocks as usize;
+        
+        let sefs = SEFS {
             super_block: RwLock::new(Dirty::new(super_block)),
             free_map: RwLock::new(Dirty::new(free_map)),
+            meta_data_cache: RwLock::new(Dirty::new(vec![[0u8; BLKSIZE]; blocks])),
             inodes: RwLock::new(BTreeMap::new()),
             device,
             meta_file,
             time_provider,
             uuid_provider,
             self_ptr: Weak::default(),
-        }
-        .wrap())
+        }.wrap();
+        // When opening an image for incremental zip, the metadata cache is initialized
+        #[cfg(feature = "create_image")]
+        sefs.init_meta_data_cache();
+        Ok(sefs)
     }
 
     /// Create a new SEFS
@@ -928,10 +983,14 @@ impl SEFS {
         device.clear()?;
         let meta_file = device.create(METAFILE_NAME)?;
         meta_file.set_len(blocks * BLKSIZE)?;
-
+        let zeros = vec![0u8; BLKSIZE];
+        for i in 0..blocks {
+            meta_file.write_at(&zeros,i * BLKSIZE)?;
+        }
         let sefs = SEFS {
             super_block: RwLock::new(Dirty::new_dirty(super_block)),
             free_map: RwLock::new(Dirty::new_dirty(free_map)),
+            meta_data_cache: RwLock::new(Dirty::new_dirty(vec![[0u8; BLKSIZE]; blocks])),
             inodes: RwLock::new(BTreeMap::new()),
             device,
             meta_file,
@@ -940,6 +999,9 @@ impl SEFS {
             self_ptr: Weak::default(),
         }
         .wrap();
+        // When creating an image, the metadata cache is initialized
+        #[cfg(feature = "create_image")]
+        sefs.init_meta_data_cache();
         // Init root INode
         let root = sefs.new_inode(FileType::Dir, 0o755)?;
         assert_eq!(root.id, BLKN_ROOT);
@@ -951,6 +1013,23 @@ impl SEFS {
         root.sync_all()?;
 
         Ok(sefs)
+    }
+
+    #[cfg(feature = "create_image")]
+    /// Initialize/Copy the cache of metadata when opening/creating SEFS
+    pub fn init_meta_data_cache(&self) {
+        let mut meta_data_cache = self.meta_data_cache.write();
+        let num_blocks = self.super_block.read().blocks as usize;
+        meta_data_cache.resize(num_blocks, [0u8; BLKSIZE]);
+
+        for i in 0..num_blocks {
+            self.meta_file
+                .read_block(i, &mut meta_data_cache[i])
+                .expect("failed to read block");
+        }
+        meta_data_cache.sync();
+
+
     }
 
     /// Wrap pure SEFS with Arc
@@ -968,9 +1047,18 @@ impl SEFS {
     }
 
     /// Write back super block and free map if dirty
-    fn sync_metadata(&self) -> vfs::Result<()> {
-        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
+    pub fn sync_metadata(&self) -> vfs::Result<()> {
+        let (mut free_map, mut super_block, mut meta_data_cache) = self.write_lock_free_map_and_super_block();
         // Sync super block
+
+        if meta_data_cache.dirty() {
+            for i in 0..super_block.blocks as usize {
+                self.meta_file
+                    .write_all_at(&meta_data_cache[i], BLKSIZE * i)
+                    .expect("failed to write block");
+            }
+            meta_data_cache.sync();
+        }
         if super_block.dirty() {
             self.meta_file
                 .write_all_at(super_block.as_buf(), BLKSIZE * BLKN_SUPER)?;
@@ -992,7 +1080,7 @@ impl SEFS {
 
     /// Allocate a block, return block id
     fn alloc_block(&self) -> Option<usize> {
-        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
+        let (mut free_map, mut super_block, mut meta_data_cache) = self.write_lock_free_map_and_super_block();
         let id = free_map.alloc().or_else(|| {
             // Allocate a new group
             let new_group_id = super_block.groups as usize;
@@ -1002,6 +1090,12 @@ impl SEFS {
             self.meta_file
                 .set_len(super_block.groups as usize * BLKBITS * BLKSIZE)
                 .expect("failed to extend meta file");
+            #[cfg(feature = "create_image")]{
+                for _ in 0..BLKBITS {
+                    meta_data_cache.push([0u8; BLKSIZE]);
+                }
+            }
+
             free_map.extend(core::iter::repeat(true).take(BLKBITS));
             // Set the bit to false to avoid to allocate it as INode ID
             free_map.set(Self::get_freemap_block_id_of_group(new_group_id), false);
@@ -1015,7 +1109,7 @@ impl SEFS {
 
     /// Release a block
     fn free_block(&self, block_id: usize) {
-        let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
+        let (mut free_map, mut super_block, _meta_data_cache) = self.write_lock_free_map_and_super_block();
         assert!(!free_map[block_id]);
         free_map.set(block_id, true);
         super_block.unused_blocks += 1;
@@ -1028,10 +1122,12 @@ impl SEFS {
     ) -> (
         RwLockWriteGuard<Dirty<BitVec<Lsb0, u8>>>,
         RwLockWriteGuard<Dirty<SuperBlock>>,
+        RwLockWriteGuard<Dirty<Vec<[u8; BLKSIZE]>>>
     ) {
         let free_map = self.free_map.write();
         let super_block = self.super_block.write();
-        (free_map, super_block)
+        let meta_data_cache = self.meta_data_cache.write();
+        (free_map, super_block, meta_data_cache)
     }
 
     /// Create a new INode struct, then insert it to self.inodes
@@ -1043,7 +1139,6 @@ impl SEFS {
         create: bool,
     ) -> vfs::Result<Arc<INodeImpl>> {
         let filename = disk_inode.disk_filename.to_string();
-
         let inode = Arc::new(INodeImpl {
             id,
             disk_inode: RwLock::new(disk_inode),
@@ -1065,7 +1160,6 @@ impl SEFS {
     /// ** Must ensure it's a valid INode **
     fn get_inode(&self, id: INodeId) -> vfs::Result<Arc<INodeImpl>> {
         assert!(!self.free_map.read()[id]);
-
         // In the BTreeSet and not weak.
         if let Some(inode) = self.inodes.read().get(&id) {
             if let Some(inode) = inode.upgrade() {

@@ -3,6 +3,7 @@ use std::ffi::CString;
 use std::io::{Error as IoError, ErrorKind, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -13,13 +14,24 @@ use structopt::StructOpt;
 use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
 use rcore_fs_cli::fuse::VfsFuse;
-use rcore_fs_cli::zip::{unzip_dir, zip_dir};
+use rcore_fs_cli::zip::{unzip_dir, zip_dir_parallel, update_dir};
 use rcore_fs_sefs as sefs;
 use rcore_fs_sefs::dev::std_impl::StdUuidProvider;
 use rcore_fs_unionfs as unionfs;
 
 mod enclave;
 mod sgx_dev;
+
+#[derive(Debug)]
+struct MainError(String);
+
+impl std::error::Error for MainError {}
+
+impl std::fmt::Display for MainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -58,6 +70,28 @@ enum Cmd {
         /// Target unzip directory
         #[structopt(parse(from_os_str))]
         dir: PathBuf,
+        /// Protect the integrity of FS
+        #[structopt(short, long)]
+        protect_integrity: bool,
+        /// Key for decryption
+        #[structopt(short, long, parse(from_os_str))]
+        key: Option<PathBuf>,
+    },
+    /// Update data from <dir> to <image>
+    #[structopt(name = "update")]
+    Update {
+        /// Source SEFS image directory
+        #[structopt(parse(from_os_str))]
+        image: PathBuf,
+        /// Target directory
+        #[structopt(parse(from_os_str))]
+        dir: PathBuf,
+        // LogFile directory
+        #[structopt(parse(from_os_str))]
+        log: PathBuf,
+        /// Root MAC of the SEFS image
+        #[structopt(parse(from_os_str))]
+        mac: PathBuf,
         /// Protect the integrity of FS
         #[structopt(short, long)]
         protect_integrity: bool,
@@ -158,7 +192,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
                 sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
             };
-            zip_dir(&dir, sefs_fs.root_inode())?;
+            //Use thread pool to speed up the zip process
+            zip_dir_parallel(&dir, sefs_fs.root_inode())
+                .map_err(|e| Box::new(MainError(format!("failed to zip: {}", e))) as Box<dyn Error>)?;
             sefs_fs.sync()?;
             let root_mac_str = {
                 let mut s = String::from("");
@@ -189,6 +225,41 @@ fn main() -> Result<(), Box<dyn Error>> {
             std::fs::create_dir(&dir)?;
             unzip_dir(&dir, sefs_fs.root_inode())?;
             println!("Decrypt the SEFS image successfully");
+        }
+        Cmd::Update {
+            image,
+            dir,
+            log,
+            mac,
+            protect_integrity,
+            key,
+        } => {
+            let sefs_fs = {
+                let key = parse_key(&key)?;
+                let mode = sgx_dev::EncryptMode::from_parameters(protect_integrity, &key)?;
+                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+                sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            };        
+            let file = std::fs::File::open(&log)?;
+            let reader = BufReader::new(file);  
+            for line in reader.lines() {
+                let path = PathBuf::from(line?.trim_end().to_string());
+                update_dir(&dir, &path, sefs_fs.root_inode())?;
+                sefs_fs.sync()?;
+            }
+            let root_mac_str = {
+                let mut s = String::from("");
+                for (i, byte) in sefs_fs.root_mac().iter().enumerate() {
+                    if i != 0 {
+                        s += "-";
+                    }
+                    s += &format!("{:02x}", byte);
+                }
+                s
+            };
+            let f = std::fs::File::create(mac)?;
+            f.write_all_at(root_mac_str.as_bytes(), 0)?;
+            println!("Update the SEFS image successfully");
         }
     }
     Ok(())
