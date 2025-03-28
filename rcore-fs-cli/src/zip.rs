@@ -8,6 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::str;
 use std::sync::Arc;
+use std::env;
 
 use rcore_fs::vfs::{FileType, DirEntryData, INode, PATH_MAX};
 use rcore_fs::vfs::FsError;
@@ -62,7 +63,6 @@ pub fn zip_dir_task(path: &Path, inode: Arc<dyn INode>, pool: &ThreadPool) -> Re
 
     if dir_entries.len() > 0 {
         process_sync(inode, dir_entries, file_tasks, &pool);
-        // handles.lock().unwrap().push(handel);
     }
     Ok(())
 }
@@ -127,5 +127,101 @@ pub fn unzip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error
             _ => panic!("unsupported file type"),
         }
     }
+    Ok(())
+}
+
+pub fn inc_zip_dir(root_path: &Path, inc_path: &Path, root_inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
+    // Convert to absolute path
+    let abs_root = if root_path.is_absolute() {
+        root_path.to_path_buf()
+    } else {
+        env::current_dir()?.join(root_path)
+    }.canonicalize()?;
+
+    let abs_inc = if inc_path.is_absolute() {
+        inc_path.to_path_buf()
+    } else {
+        env::current_dir()?.join(inc_path)
+    }.canonicalize()?;
+
+    if !abs_inc.starts_with(&abs_root) {
+        return Err(format!("{} is not under root {}", 
+            abs_inc.display(), abs_root.display()).into());
+    }
+
+    let relative_path = abs_inc.strip_prefix(&abs_root)?;
+    let mut components = Vec::new();
+
+    for c in relative_path.components() {
+        let os_str = c.as_os_str();
+        let s = os_str.to_str()
+            .ok_or_else(|| format!("Invalid UTF-8 component: {:?}", os_str))?;
+        components.push(s.to_string());
+    }
+
+    let mut current_inode = root_inode;
+    for (i, name) in components.iter().enumerate() {
+        let is_last = i == components.len() - 1;
+        
+        // Process the directory in the middle of the path
+        if !is_last {
+            current_inode = match current_inode.lookup_follow(name, 1) {
+                Ok(inode) => {
+                    if inode.metadata()?.type_ != FileType::Dir {
+                        return Err(format!("'{}' exists but is not directory", name).into());
+                    }
+                    inode
+                }
+                Err(_) => current_inode.create(name, FileType::Dir, 0o755)?,
+            };
+            continue;
+        }
+
+        // Process the final path
+        if let Ok(_) = current_inode.lookup_follow(name, 1) {
+            if let Err(e) = current_inode.unlink_recursive(name) {
+                return Err(Box::new(e));
+            }
+        }
+        
+        if !abs_inc.exists() { return Ok(()); }
+
+        let meta = fs::symlink_metadata(&abs_inc)?;
+        let mode = (meta.permissions().mode() & S_IMASK) as u16;
+
+        match meta.file_type() {
+            ft if ft.is_file() => {
+                let inode = current_inode.create(name, FileType::File, mode)?;
+                let mut file = fs::File::open(&abs_inc)?;
+                let size = file.metadata()?.len() as usize;
+                inode.resize(size)?;
+                
+                let mut buf = vec![0u8; 4096];
+                let mut offset = 0;
+                while let Ok(len) = file.read(&mut buf) {
+                    if len == 0 { break; }
+                    inode.write_at(offset, &buf[..len])?;
+                    offset += len;
+                }
+            }
+            ft if ft.is_dir() => {
+                let inode = current_inode.create(name, FileType::Dir, mode)?;
+                for entry in fs::read_dir(&abs_inc)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    inc_zip_dir(&abs_root, &path, inode.clone())?;
+                }
+            }
+            ft if ft.is_symlink() => {
+                let target = fs::read_link(&abs_inc)?;
+                let inode = current_inode.create(name, FileType::SymLink, mode)?;
+                let data = target.as_os_str().as_bytes();
+                inode.resize(data.len())?;
+                inode.write_at(0, data)?;
+            }
+            _ => return Err("Unsupported file type".into()),
+        }
+    }
+
     Ok(())
 }

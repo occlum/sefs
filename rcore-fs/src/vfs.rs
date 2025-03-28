@@ -91,6 +91,11 @@ pub trait INode: Any + Sync + Send {
         Err(FsError::NotSupported)
     }
 
+    /// Recursive delete a hard link `name`
+    fn unlink_recursive(&self, _name: &str) -> Result<()> {
+        Err(FsError::NotSupported)
+    }
+
     /// Move INode `self/old_name` to `target/new_name`.
     /// If `target` equals `self`, do rename.
     fn move_(&self, _old_name: &str, _target: &Arc<dyn INode>, _new_name: &str) -> Result<()> {

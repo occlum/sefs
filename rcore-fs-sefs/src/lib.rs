@@ -22,12 +22,12 @@ use rcore_fs::vfs::{self, AllocFlags, DirentVisitor, FallocateMode, FileSystem, 
 use spin::{RwLock, RwLockWriteGuard};
 
 use self::dev::*;
-use self::cursor_file::*;
+use self::ram_file::*;
 pub use self::structs::SEFS_MAGIC;
 use self::structs::*;
 
 pub mod dev;
-mod cursor_file;
+mod ram_file;
 mod structs;
 
 /// Helper methods for `File`
@@ -664,6 +664,45 @@ impl vfs::INode for INodeImpl {
         Ok(())
     }
 
+    fn unlink_recursive(&self, name: &str) -> vfs::Result<()> {
+        let info = self.metadata()?;
+        if info.type_ != vfs::FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        if info.nlinks == 0 {
+            return Err(FsError::DirRemoved);
+        }
+        if name == "." || name == ".." || name.is_empty() {
+            return Err(FsError::IsDir);
+        }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
+        }
+
+        let (inode_id, entry_id) = self.get_file_inode_and_entry_id(name)?;
+        let inode = self.fs.get_inode(inode_id)?;
+
+        if inode.disk_inode.read().type_ == FileType::Dir {
+            if inode.disk_inode.read().blocks > 2 {
+                let total = inode.disk_inode.read().blocks as usize;
+
+                // When deleting a sub-entry in the directory, its order will be adjusted, 
+                // and the last one will be moved to the front (dirent_inode_remove). 
+                // Therefore, delete it from the back to the front.
+                for sub_id in (2..total).rev() {
+                    let sub_entry = inode.file.read_direntry(sub_id)?;
+                    let sub_entry_name = sub_entry.name.as_ref();
+                    inode.unlink_recursive(sub_entry_name)?;
+                }
+                inode.file.set_len(2 * DIRENT_SIZE)?;
+                inode.disk_inode.write().blocks = 2;
+            }
+        }
+        self.dirent_inode_remove(inode, entry_id)?;
+        self.sync_all()?;
+        Ok(())
+    }
+
     fn link(&self, name: &str, other: &Arc<dyn INode>) -> vfs::Result<()> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -975,7 +1014,7 @@ impl SEFS {
         if for_zip {
             // Read all data in into meta_file(in memory)
             let meta_file_disk = device.open(METAFILE_NAME)?;
-            meta_file = Box::new(CursorFile::new());
+            meta_file = Box::new(RamFile::new());
             super_block = meta_file_disk.load_struct::<SuperBlock>(BLKN_SUPER)?;
 
             if !super_block.check() {
@@ -1074,7 +1113,7 @@ impl SEFS {
         device.clear()?;
         let meta_file: Box<dyn File>;
         if for_zip {
-            meta_file = Box::new(CursorFile::new());
+            meta_file = Box::new(RamFile::new());
         } else {
             meta_file = device.create(METAFILE_NAME)?;
         }

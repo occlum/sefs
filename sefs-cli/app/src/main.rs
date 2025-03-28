@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::ffi::CString;
-use std::io::{Error as IoError, ErrorKind, Read};
+use std::fs::File;
+use std::io::{Error as IoError, ErrorKind, Read, BufRead, BufReader};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use structopt::StructOpt;
 use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
 use rcore_fs_cli::fuse::VfsFuse;
-use rcore_fs_cli::zip::{unzip_dir, zip_dir};
+use rcore_fs_cli::zip::{unzip_dir, zip_dir, inc_zip_dir};
 use rcore_fs_sefs as sefs;
 use rcore_fs_sefs::dev::std_impl::StdUuidProvider;
 use rcore_fs_unionfs as unionfs;
@@ -48,6 +49,12 @@ enum Cmd {
         /// Key for encryption
         #[structopt(short, long, parse(from_os_str))]
         key: Option<PathBuf>,
+        /// Enable incremental zip mode
+        #[structopt(long = "inc")]
+        inc: bool,
+        /// Path for incremental data [default: <image>.inc]
+        #[structopt(long = "inc-path", parse(from_os_str))]
+        inc_path: Option<PathBuf>,
     },
     /// Unzip data from given <image> to <dir>
     #[structopt(name = "unzip")]
@@ -150,15 +157,48 @@ fn main() -> Result<(), Box<dyn Error>> {
             image,
             mac,
             key,
+            inc,
+            inc_path
         } => {
-            let sefs_fs = {
-                std::fs::create_dir(&image)?;
-                let key = parse_key(&key)?;
-                let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
-                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::create_for_zip(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            let actual_inc_path = inc_path.unwrap_or_else(|| {
+                let lossy_str = dir.to_string_lossy();
+                let trimmed_image = lossy_str.trim_end_matches('/');
+                let trimmed_image_path = format!("{}.path_log", trimmed_image);
+                PathBuf::from(trimmed_image_path)
+            });
+            let mut inc_mode = inc;
+            if inc && !actual_inc_path.exists() {
+                println!("File \"{}\" was not found, and it could not be packaged incrementally, switch to normal zip mode", actual_inc_path.display());
+                inc_mode = false;
+            }
+            let sefs_fs = if inc_mode {
+                let sefs_fs_inc = {
+                    let key = parse_key(&key)?;
+                    let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
+                    let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+                    sefs::SEFS::open(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                };
+
+                let inc_path_file = File::open(&actual_inc_path)?;
+                let reader = BufReader::new(inc_path_file);
+
+                // Iterate over each path in the file and call inc_zip_dir
+                for line in reader.lines() {
+                    let p = PathBuf::from(line?); // Each line is a new path
+                    inc_zip_dir(&dir, &p, sefs_fs_inc.root_inode())?;
+                }
+                sefs_fs_inc
+            } else {
+                let sefs_fs_zip = {
+                    std::fs::create_dir(&image)?;
+                    let key = parse_key(&key)?;
+                    let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
+                    let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+                    sefs::SEFS::create_for_zip(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                };
+                zip_dir(&dir, sefs_fs_zip.root_inode())?;
+                sefs_fs_zip
             };
-            zip_dir(&dir, sefs_fs.root_inode())?;
             sefs_fs.sync()?;
             sefs_fs.write_metadata()?;
             let root_mac_str = {
@@ -173,6 +213,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             let f = std::fs::File::create(mac)?;
             f.write_all_at(root_mac_str.as_bytes(), 0)?;
+            if actual_inc_path.exists() {
+                std::fs::remove_file(&actual_inc_path)?;
+            }
             println!("Generate the SEFS image successfully");
         }
         Cmd::Unzip {
