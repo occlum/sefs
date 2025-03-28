@@ -156,10 +156,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let key = parse_key(&key)?;
                 let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+                sefs::SEFS::create_for_zip(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
             };
             zip_dir(&dir, sefs_fs.root_inode())?;
             sefs_fs.sync()?;
+            sefs_fs.write_metadata()?;
             let root_mac_str = {
                 let mut s = String::from("");
                 for (i, byte) in sefs_fs.root_mac().iter().enumerate() {

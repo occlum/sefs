@@ -18,14 +18,16 @@ use core::ops::Range;
 use bitvec::prelude::*;
 use rcore_fs::dev::{DevResult, TimeProvider};
 use rcore_fs::dirty::Dirty;
-use rcore_fs::vfs::{self, AllocFlags, DirentVisitor, FallocateMode, FileSystem, FsError, INode};
+use rcore_fs::vfs::{self, AllocFlags, DirentVisitor, FallocateMode, FileSystem, DirEntryData, FsError, INode};
 use spin::{RwLock, RwLockWriteGuard};
 
 use self::dev::*;
+use self::cursor_file::*;
 pub use self::structs::SEFS_MAGIC;
 use self::structs::*;
 
 pub mod dev;
+mod cursor_file;
 mod structs;
 
 /// Helper methods for `File`
@@ -546,6 +548,89 @@ impl vfs::INode for INodeImpl {
         Ok(inode)
     }
 
+    // Only used in the accelerated packaging process, 
+    // you need to call "write_all_direntry(...)" to manually 
+    // write all directory entries;
+    fn create_for_zip(
+        &self,
+        name: &str,
+        type_: vfs::FileType,
+        mode: u16,
+    ) -> vfs::Result<Arc<dyn vfs::INode>> {
+        let type_ = match type_ {
+            vfs::FileType::File => FileType::File,
+            vfs::FileType::Dir => FileType::Dir,
+            vfs::FileType::SymLink => FileType::SymLink,
+            vfs::FileType::Socket => FileType::Socket,
+            _ => return Err(FsError::InvalidParam),
+        };
+        let info = self.metadata()?;
+        if info.type_ != vfs::FileType::Dir {
+            return Err(FsError::NotDir);
+        }
+        if info.nlinks == 0 {
+            return Err(FsError::DirRemoved);
+        }
+        if name.len() > MAX_FNAME_LEN {
+            return Err(FsError::NameTooLong);
+        }
+
+        // Ensure the name is not exist
+        if self.get_file_inode_id(name).is_ok() {
+            return Err(FsError::EntryExist);
+        }
+
+        // Create a new INode
+        let inode = self.fs.new_inode(type_, mode)?;
+        if type_ == FileType::Dir {
+            inode.dirent_init(self.id)?;
+        }
+        // Append success, increase nlinks
+        inode.nlinks_inc();
+        if type_ == FileType::Dir {
+            inode.nlinks_inc(); //for .
+            self.nlinks_inc(); //for ..
+        }
+        // Update metadata file to make the INode valid
+        self.fs.sync_metadata()?;
+        inode.sync_all()?;
+        // Sync the dirINode's info into file
+        // MUST sync the INode's info first, or the entry maybe invalid
+        self.sync_all()?;
+
+        Ok(inode)
+    }
+
+    fn write_all_direntry(&self, dir_entries: Vec<DirEntryData>) -> vfs::Result<()> {
+        let mut inode = self.disk_inode.write();
+        let total = &mut inode.blocks;
+        let mut entry_id = *total as usize;
+    
+        for entry in dir_entries {
+            let dir_inode = entry.inode
+                .downcast_ref::<INodeImpl>()
+                .ok_or(FsError::NotSameFs)?;
+            let type_ = match entry.file_type {
+                vfs::FileType::File => FileType::File,
+                vfs::FileType::Dir => FileType::Dir,
+                vfs::FileType::SymLink => FileType::SymLink,
+                vfs::FileType::Socket => FileType::Socket,
+                _ => return Err(FsError::InvalidParam),
+            };
+            let entry = DiskEntry {
+                id: dir_inode.id as u32,
+                name: Str256::from(entry.name.as_str()),
+                type_,
+            };
+            self.file.write_direntry(entry_id, &entry)?;
+            *total += 1;
+            entry_id += 1;
+        }
+    
+        self.file.flush()?;
+        Ok(())
+    }
+
     fn unlink(&self, name: &str) -> vfs::Result<()> {
         let info = self.metadata()?;
         if info.type_ != vfs::FileType::Dir {
@@ -868,12 +953,56 @@ impl SEFS {
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
     ) -> vfs::Result<Arc<Self>> {
-        let meta_file = device.open(METAFILE_NAME)?;
+        Self::_open(device, time_provider, uuid_provider, false)
+    }
 
-        // Load super block
-        let super_block = meta_file.load_struct::<SuperBlock>(BLKN_SUPER)?;
-        if !super_block.check() {
-            return Err(FsError::WrongFs);
+    pub fn open_for_zip(
+        device: Box<dyn Storage>,
+        time_provider: &'static dyn TimeProvider,
+        uuid_provider: &'static dyn UuidProvider,
+    ) -> vfs::Result<Arc<Self>> {
+        Self::_open(device, time_provider, uuid_provider, true)
+    }
+
+    fn _open(
+        device: Box<dyn Storage>,
+        time_provider: &'static dyn TimeProvider,
+        uuid_provider: &'static dyn UuidProvider,
+        for_zip: bool,
+    ) -> vfs::Result<Arc<Self>> {
+        let meta_file: Box<dyn File>;
+        let super_block: SuperBlock;
+        if for_zip {
+            // Read all data in into meta_file(in memory)
+            let meta_file_disk = device.open(METAFILE_NAME)?;
+            meta_file = Box::new(CursorFile::new());
+            super_block = meta_file_disk.load_struct::<SuperBlock>(BLKN_SUPER)?;
+
+            if !super_block.check() {
+                return Err(FsError::WrongFs);
+            }
+
+            let mut offset = 0;
+            let mut buffer = vec![0u8; crate::BLKSIZE];
+            let mut remaining_len = super_block.blocks as usize * crate::BLKSIZE;
+        
+            while remaining_len > 0 {
+                let bytes_to_read = remaining_len.min(crate::BLKSIZE);
+                let len = meta_file_disk.read_at(&mut buffer[..bytes_to_read], offset)?;
+                if len == 0 {
+                    break;
+                }
+                meta_file.write_all_at(&buffer[..len], offset)?;
+                offset += len;
+                remaining_len -= len;
+            }    
+        } else {
+            meta_file = device.open(METAFILE_NAME)?;
+            super_block = meta_file.load_struct::<SuperBlock>(BLKN_SUPER)?;
+
+            if !super_block.check() {
+                return Err(FsError::WrongFs);
+            }
         }
 
         // Load free map
@@ -908,6 +1037,23 @@ impl SEFS {
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
     ) -> vfs::Result<Arc<Self>> {
+        Self::_create(device, time_provider, uuid_provider, false)
+    }
+
+    pub fn create_for_zip(
+        device: Box<dyn Storage>,
+        time_provider: &'static dyn TimeProvider,
+        uuid_provider: &'static dyn UuidProvider,
+    ) -> vfs::Result<Arc<Self>> {
+        Self::_create(device, time_provider, uuid_provider, true)
+    }
+
+    fn _create(
+        device: Box<dyn Storage>,
+        time_provider: &'static dyn TimeProvider,
+        uuid_provider: &'static dyn UuidProvider,
+        for_zip: bool,
+    ) -> vfs::Result<Arc<Self>> {
         let blocks = BLKBITS;
 
         let super_block = SuperBlock {
@@ -926,7 +1072,12 @@ impl SEFS {
         };
         // Clear the existing files in storage
         device.clear()?;
-        let meta_file = device.create(METAFILE_NAME)?;
+        let meta_file: Box<dyn File>;
+        if for_zip {
+            meta_file = Box::new(CursorFile::new());
+        } else {
+            meta_file = device.create(METAFILE_NAME)?;
+        }
         meta_file.set_len(blocks * BLKSIZE)?;
 
         let sefs = SEFS {
@@ -965,6 +1116,28 @@ impl SEFS {
             (*ptr).self_ptr = weak;
         }
         unsafe { Arc::from_raw(ptr) }
+    }
+
+    pub fn write_metadata(&self) -> vfs::Result<()> {
+        let mut offset = 0;
+        let mut buffer = vec![0u8; crate::BLKSIZE];
+    
+        let meta_file_disk = self.device.create(METAFILE_NAME)?;
+        let mut remaining_len = self.super_block.read().blocks as usize * crate::BLKSIZE;
+        meta_file_disk.set_len(remaining_len)?;
+
+        while remaining_len > 0 {
+            let bytes_to_read = remaining_len.min(crate::BLKSIZE);
+            let len = self.meta_file.read_at(&mut buffer[..bytes_to_read], offset)?;
+            if len == 0 {
+                break;
+            }
+            meta_file_disk.write_all_at(&buffer[..len], offset)?;
+            offset += len;
+            remaining_len -= len;
+        }
+        meta_file_disk.flush()?;
+        Ok(())
     }
 
     /// Write back super block and free map if dirty

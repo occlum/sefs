@@ -9,42 +9,85 @@ use std::path::Path;
 use std::str;
 use std::sync::Arc;
 
-use rcore_fs::vfs::{FileType, INode, PATH_MAX};
+use rcore_fs::vfs::{FileType, DirEntryData, INode, PATH_MAX};
+use rcore_fs::vfs::FsError;
+
+use crate::thread_pool::ThreadPool;
 
 const BUF_SIZE: usize = 0x10000;
 const S_IMASK: u32 = 0o777;
 
+struct FileTask {
+    inode: Arc<dyn INode>,
+    entry: fs::DirEntry,
+}
+
 pub fn zip_dir(path: &Path, inode: Arc<dyn INode>) -> Result<(), Box<dyn Error>> {
+    let pool = ThreadPool::new(30);
+    zip_dir_task(path, inode, &pool)?;
+    Ok(())
+}
+
+pub fn zip_dir_task(path: &Path, inode: Arc<dyn INode>, pool: &ThreadPool) -> Result<(), Box<dyn Error>> {
     let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.map(|dir| dir.unwrap()).collect();
     entries.sort_by_key(|entry| entry.file_name());
+    
+    let mut dir_entries: Vec<DirEntryData> = Vec::new();
+    let mut file_tasks: Vec<FileTask> = Vec::new();
+
     for entry in entries {
         let name_ = entry.file_name();
         let name = name_.to_str().unwrap();
         let metadata = fs::symlink_metadata(entry.path())?;
         let type_ = metadata.file_type();
         let mode = (metadata.permissions().mode() & S_IMASK) as u16;
-        //println!("zip: name: {:?}, mode: {:#o}", entry.path(), mode);
+
         if type_.is_file() {
-            let inode = inode.create(name, FileType::File, mode)?;
-            let mut file = fs::File::open(entry.path())?;
-            inode.resize(file.metadata()?.len() as usize)?;
-            let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
-            let mut offset = 0usize;
-            let mut len = BUF_SIZE;
-            while len == BUF_SIZE {
-                len = file.read(buf.as_mut())?;
-                inode.write_at(offset, &buf[..len])?;
-                offset += len;
-            }
-        } else if type_.is_dir() {
-            let inode = inode.create(name, FileType::Dir, mode)?;
-            zip_dir(entry.path().as_path(), inode)?;
+            let inode = inode.create_for_zip(name, FileType::File, mode)?;
+            dir_entries.push(DirEntryData { inode: Arc::clone(&inode), name: String::from(name), file_type: FileType::File });
+            file_tasks.push(FileTask { inode, entry });
         } else if type_.is_symlink() {
             let target = fs::read_link(entry.path())?;
-            let inode = inode.create(name, FileType::SymLink, mode)?;
+            let inode = inode.create_for_zip(name, FileType::SymLink, mode)?;
+            dir_entries.push(DirEntryData { inode: Arc::clone(&inode), name: String::from(name), file_type: FileType::SymLink });
             let data = target.as_os_str().as_bytes();
             inode.resize(data.len())?;
             inode.write_at(0, data)?;
+        } else if type_.is_dir() {
+            let inode = inode.create_for_zip(name, FileType::Dir, mode)?;
+            dir_entries.push(DirEntryData { inode: Arc::clone(&inode), name: String::from(name), file_type: FileType::Dir });
+            zip_dir_task(entry.path().as_path(), inode, &pool)?;
+        }
+    }
+
+    if dir_entries.len() > 0 {
+        process_sync(inode, dir_entries, file_tasks, &pool);
+        // handles.lock().unwrap().push(handel);
+    }
+    Ok(())
+}
+
+fn process_sync(dir_inode: Arc<dyn INode>, dir_entries: Vec<DirEntryData>, file_tasks: Vec<FileTask>, pool: &ThreadPool) {
+    pool.execute(move || {
+        if let Err(e) = dir_inode.write_all_direntry(dir_entries) {
+            eprintln!("Failed to write direntry: {}", e);
+        }
+        if let Err(e) = process_files_task(&file_tasks) {
+            eprintln!("Failed to process files: {}", e);
+        }
+    });
+}
+
+fn process_files_task(file_tasks: &[FileTask]) -> Result<(), FsError> {
+    for task in file_tasks {
+        let mut file = fs::File::open(task.entry.path())?;
+        let mut buf = unsafe { Box::<[u8; BUF_SIZE]>::new_uninit().assume_init() };
+        let mut offset = 0usize;
+        let mut len = BUF_SIZE;
+        while len == BUF_SIZE {
+            len = file.read(buf.as_mut())?;
+            task.inode.write_at(offset, &buf[..len])?;
+            offset += len;
         }
     }
     Ok(())

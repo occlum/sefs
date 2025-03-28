@@ -3,6 +3,7 @@ use rcore_fs_sefs::dev::SefsMac;
 use rcore_fs_sefs::dev::{File, Storage};
 use sgx_types::*;
 use std::fs::{read_dir, remove_file};
+use std::sync::{Arc, Mutex};
 use std::io;
 use std::mem;
 use std::path::*;
@@ -75,14 +76,14 @@ impl Storage for SgxStorage {
         let mut path = self.path.clone();
         path.push(file_id);
         let file = file_open(path.to_str().unwrap(), false, &self.mode)?;
-        Ok(Box::new(SgxFile { file }))
+        Ok(Box::new(SgxFile::new(file)))
     }
 
     fn create(&self, file_id: &str) -> DevResult<Box<dyn File>> {
         let mut path = self.path.clone();
         path.push(file_id);
         let file = file_open(path.to_str().unwrap(), true, &self.mode)?;
-        Ok(Box::new(SgxFile { file }))
+        Ok(Box::new(SgxFile::new(file)))
     }
 
     fn remove(&self, file_id: &str) -> DevResult<()> {
@@ -110,17 +111,27 @@ impl Storage for SgxStorage {
 }
 
 pub struct SgxFile {
-    file: usize,
+    file: Arc<Mutex<usize>>,
+}
+
+impl SgxFile {
+    pub fn new(file: usize) -> Self {
+        SgxFile {
+            file: Arc::new(Mutex::new(file)),
+        }
+    }
 }
 
 impl File for SgxFile {
     fn read_at(&self, buf: &mut [u8], offset: usize) -> DevResult<usize> {
-        let len = file_read_at(self.file, offset, buf);
+        let file = self.file.lock().unwrap();
+        let len = file_read_at(*file, offset, buf);
         Ok(len)
     }
 
     fn write_at(&self, buf: &[u8], offset: usize) -> DevResult<usize> {
-        let len = file_write_at(self.file, offset, buf);
+        let file = self.file.lock().unwrap();
+        let len = file_write_at(*file, offset, buf);
         if len != buf.len() {
             println!(
                 "write_at return len: {} not equal to buf_len: {}",
@@ -138,7 +149,8 @@ impl File for SgxFile {
     }
 
     fn flush(&self) -> DevResult<()> {
-        match file_flush(self.file) {
+        let file = self.file.lock().unwrap();
+        match file_flush(*file) {
             0 => Ok(()),
             e => {
                 println!("failed to flush");
@@ -148,9 +160,10 @@ impl File for SgxFile {
     }
 
     fn get_file_mac(&self) -> DevResult<SefsMac> {
+        let file = self.file.lock().unwrap();
         let mut mac: sgx_aes_gcm_128bit_tag_t = [0u8; 16];
 
-        file_get_mac(self.file, &mut mac);
+        file_get_mac(*file, &mut mac);
         let sefs_mac = SefsMac(mac);
         Ok(sefs_mac)
     }
@@ -158,7 +171,8 @@ impl File for SgxFile {
 
 impl Drop for SgxFile {
     fn drop(&mut self) {
-        let _ = file_close(self.file);
+        let file = self.file.lock().unwrap();
+        let _ = file_close(*file);
     }
 }
 
