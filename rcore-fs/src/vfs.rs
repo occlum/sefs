@@ -69,6 +69,17 @@ pub trait INode: Any + Sync + Send {
     ) -> Result<Arc<dyn INode>> {
         self.create(name, type_, mode)
     }
+    
+    /// Create a new INode in the directory, without write filename to directory entries
+    fn create_for_zip(&self, _name: &str, _type: FileType, _mode: u16) -> Result<Arc<dyn INode>> {
+        Err(FsError::NotSupported)
+    }
+
+    /// write all filenames to directory entries
+    /// _inodes: Vec<Arc<dyn INode>>, _names: Vec<String>, _types: Vec<FileType>
+    fn write_all_direntry(&self, _dir_entries: Vec<DirEntryData>) -> Result<()> {
+        Err(FsError::NotSupported)
+    }
 
     /// Create a hard link `name` to `other`
     fn link(&self, _name: &str, _other: &Arc<dyn INode>) -> Result<()> {
@@ -77,6 +88,11 @@ pub trait INode: Any + Sync + Send {
 
     /// Delete a hard link `name`
     fn unlink(&self, _name: &str) -> Result<()> {
+        Err(FsError::NotSupported)
+    }
+
+    /// Recursive delete a hard link `name`
+    fn unlink_recursive(&self, _name: &str) -> Result<()> {
         Err(FsError::NotSupported)
     }
 
@@ -338,6 +354,12 @@ pub enum FileType {
     BlockDevice,
     NamedPipe,
     Socket,
+}
+
+pub struct DirEntryData {
+    pub inode: Arc<dyn INode>,
+    pub name: String,
+    pub file_type: FileType,
 }
 
 pub const FS_MAC_SIZE: usize = 16;
