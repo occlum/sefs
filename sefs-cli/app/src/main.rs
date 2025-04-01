@@ -5,6 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::Arc;
 
 use ctrlc;
 use libc;
@@ -14,18 +15,23 @@ use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
 use rcore_fs_cli::fuse::VfsFuse;
 use rcore_fs_cli::zip::{unzip_dir, zip_dir};
+use rcore_fs_cli::thread_pool::Pool;
 use rcore_fs_sefs as sefs;
 use rcore_fs_sefs::dev::std_impl::StdUuidProvider;
 use rcore_fs_unionfs as unionfs;
 
 mod enclave;
 mod sgx_dev;
+mod cache_dev;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
     /// Path of the enclave library
     #[structopt(short, long, parse(from_os_str))]
     enclave: PathBuf,
+    /// Number of threads
+    #[structopt(short="j", long, default_value="4")]
+    thread_num: usize,
     /// Command
     #[structopt(subcommand)]
     cmd: Cmd,
@@ -48,6 +54,9 @@ enum Cmd {
         /// Key for encryption
         #[structopt(short, long, parse(from_os_str))]
         key: Option<PathBuf>,
+        /// Incremental Zip
+        #[structopt(short="i", long)]
+        incremental: bool,
     },
     /// Unzip data from given <image> to <dir>
     #[structopt(name = "unzip")]
@@ -150,16 +159,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             image,
             mac,
             key,
+            incremental
         } => {
-            let sefs_fs = {
+            if !incremental {
                 std::fs::create_dir(&image)?;
-                let key = parse_key(&key)?;
-                let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
-                let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
-                sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
+            }
+            let key = parse_key(&key)?;
+            let mode = sgx_dev::EncryptMode::from_parameters(true, &key)?;
+            let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
+            // Wrap the inner storage with CacheStorage, cache the metadata in 
+            // memory before the zipping process is completed
+            let cache_device = cache_dev::CacheStorage::new(Arc::new(Box::new(device)));
+            let sefs_fs = if incremental {
+                sefs::SEFS::open(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?
+            } else {
+                sefs::SEFS::create(Box::new(cache_device.clone()), &StdTimeProvider, &StdUuidProvider)?
             };
-            zip_dir(&dir, sefs_fs.root_inode())?;
+            let image_last_modified_time = if incremental {
+                let mut metadata_path: PathBuf = PathBuf::from(image);
+                metadata_path.push("metadata");
+                let metadata = std::fs::metadata(metadata_path)?;
+                use std::os::linux::fs::MetadataExt;
+                Some(metadata.st_ctime())
+            } else {
+                None
+            };
+            let thread_pool = Pool::new(opt.thread_num);
+            zip_dir(&dir, sefs_fs.root_inode(), &thread_pool, image_last_modified_time)?;
             sefs_fs.sync()?;
+            cache_device.write_cache_to_inner().unwrap();
             let root_mac_str = {
                 let mut s = String::from("");
                 for (i, byte) in sefs_fs.root_mac().iter().enumerate() {

@@ -205,11 +205,11 @@ impl INodeImpl {
         let mut disk_inode = self.disk_inode.write();
         if disk_inode.dirty() {
             self.fs
-                .meta_file
+                .meta_file.write()
                 .write_block(self.id, disk_inode.as_buf())?;
             disk_inode.sync();
         }
-        self.fs.meta_file.flush()?;
+        self.fs.meta_file.write().flush()?;
         Ok(())
     }
 
@@ -843,7 +843,7 @@ pub struct SEFS {
     /// device
     device: Box<dyn Storage>,
     /// metadata file
-    meta_file: Box<dyn File>,
+    meta_file: RwLock<Box<dyn File>>,
     /// Time provider
     time_provider: &'static dyn TimeProvider,
     /// uuid provider
@@ -868,10 +868,10 @@ impl SEFS {
         time_provider: &'static dyn TimeProvider,
         uuid_provider: &'static dyn UuidProvider,
     ) -> vfs::Result<Arc<Self>> {
-        let meta_file = device.open(METAFILE_NAME)?;
+        let meta_file = RwLock::new(device.open(METAFILE_NAME)?);
 
         // Load super block
-        let super_block = meta_file.load_struct::<SuperBlock>(BLKN_SUPER)?;
+        let super_block = meta_file.read().load_struct::<SuperBlock>(BLKN_SUPER)?;
         if !super_block.check() {
             return Err(FsError::WrongFs);
         }
@@ -883,7 +883,7 @@ impl SEFS {
         }
         for i in 0..super_block.groups as usize {
             let block_id = Self::get_freemap_block_id_of_group(i);
-            meta_file.read_block(
+            meta_file.read().read_block(
                 block_id,
                 &mut free_map.as_mut_slice()[BLKSIZE * i..BLKSIZE * (i + 1)],
             )?;
@@ -926,8 +926,8 @@ impl SEFS {
         };
         // Clear the existing files in storage
         device.clear()?;
-        let meta_file = device.create(METAFILE_NAME)?;
-        meta_file.set_len(blocks * BLKSIZE)?;
+        let meta_file = RwLock::new(device.create(METAFILE_NAME)?);
+        meta_file.write().set_len(blocks * BLKSIZE)?;
 
         let sefs = SEFS {
             super_block: RwLock::new(Dirty::new_dirty(super_block)),
@@ -972,7 +972,7 @@ impl SEFS {
         let (mut free_map, mut super_block) = self.write_lock_free_map_and_super_block();
         // Sync super block
         if super_block.dirty() {
-            self.meta_file
+            self.meta_file.write()
                 .write_all_at(super_block.as_buf(), BLKSIZE * BLKN_SUPER)?;
             super_block.sync();
         }
@@ -980,13 +980,13 @@ impl SEFS {
         if free_map.dirty() {
             for i in 0..super_block.groups as usize {
                 let slice = &free_map.as_slice()[BLKSIZE * i..BLKSIZE * (i + 1)];
-                self.meta_file
+                self.meta_file.write()
                     .write_all_at(slice, BLKSIZE * Self::get_freemap_block_id_of_group(i))?;
             }
             free_map.sync();
         }
         // Flush
-        self.meta_file.flush()?;
+        self.meta_file.write().flush()?;
         Ok(())
     }
 
@@ -999,7 +999,7 @@ impl SEFS {
             super_block.groups += 1;
             super_block.blocks += BLKBITS as u32;
             super_block.unused_blocks += BLKBITS as u32 - 1;
-            self.meta_file
+            self.meta_file.write()
                 .set_len(super_block.groups as usize * BLKBITS * BLKSIZE)
                 .expect("failed to extend meta file");
             free_map.extend(core::iter::repeat(true).take(BLKBITS));
@@ -1073,7 +1073,7 @@ impl SEFS {
             }
         }
         // Load if not in set, or is weak ref.
-        let disk_inode = Dirty::new(self.meta_file.load_struct::<DiskINode>(id)?);
+        let disk_inode = Dirty::new(self.meta_file.read().load_struct::<DiskINode>(id)?);
         self._new_inode(id, disk_inode, false)
     }
 
@@ -1143,7 +1143,7 @@ impl vfs::FileSystem for SEFS {
     }
 
     fn root_mac(&self) -> vfs::FsMac {
-        self.meta_file.get_file_mac().unwrap().0
+        self.meta_file.read().get_file_mac().unwrap().0
     }
 
     fn info(&self) -> vfs::FsInfo {
