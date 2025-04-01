@@ -14,6 +14,7 @@ use rcore_fs::dev::std_impl::StdTimeProvider;
 use rcore_fs::vfs::FileSystem;
 use rcore_fs_cli::fuse::VfsFuse;
 use rcore_fs_cli::zip::{unzip_dir, zip_dir};
+use rcore_fs_cli::thread_pool::Pool;
 use rcore_fs_sefs as sefs;
 use rcore_fs_sefs::dev::std_impl::StdUuidProvider;
 use rcore_fs_unionfs as unionfs;
@@ -26,6 +27,9 @@ struct Opt {
     /// Path of the enclave library
     #[structopt(short, long, parse(from_os_str))]
     enclave: PathBuf,
+    /// Number of threads
+    #[structopt(short="j", long, default_value="4")]
+    thread_num: usize,
     /// Command
     #[structopt(subcommand)]
     cmd: Cmd,
@@ -158,7 +162,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let device = sgx_dev::SgxStorage::new(enclave.geteid(), &image, mode);
                 sefs::SEFS::create(Box::new(device), &StdTimeProvider, &StdUuidProvider)?
             };
-            zip_dir(&dir, sefs_fs.root_inode())?;
+            let thread_pool = Pool::new(opt.thread_num);
+            zip_dir(&dir, sefs_fs.root_inode(), &thread_pool)?;
             sefs_fs.sync()?;
             let root_mac_str = {
                 let mut s = String::from("");
