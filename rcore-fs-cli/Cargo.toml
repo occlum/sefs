@@ -15,7 +15,7 @@ log = "=0.4.17"
 fuse = { version = "0.3", optional = true }
 structopt = "0.3"
 env_logger = "0.7"
-git-version = "0.3"
+git-version = "=0.3.5"
 rcore-fs = { path = "../rcore-fs", features = ["std"] }
 rcore-fs-sfs = { path = "../rcore-fs-sfs" }
 rcore-fs-sefs = { path = "../rcore-fs-sefs", features = ["std"] }
